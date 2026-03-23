@@ -219,6 +219,137 @@ async function botReply(env, chatId, text) {
   });
 }
 
+function extractHeadingChunks(markdown) {
+  const normalized = String(markdown || "").replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const chunks = [];
+  const headings = [];
+  let body = [];
+  const flush = () => {
+    const content = body.join("\n").trim();
+    if (!content) return;
+    chunks.push({
+      heading_path: headings.join(" > ") || null,
+      content,
+      tokens_est: Math.max(1, Math.ceil(content.length / 4)),
+    });
+    body = [];
+  };
+  for (const line of lines) {
+    const match = /^(#{1,3})\s+(.+?)\s*$/.exec(line);
+    if (match) {
+      flush();
+      const level = match[1].length;
+      headings.splice(level - 1);
+      headings[level - 1] = match[2].trim();
+      continue;
+    }
+    body.push(line);
+  }
+  flush();
+  if (!chunks.length) {
+    const plain = normalized.trim();
+    if (!plain) return [];
+    const chunkSize = 1200;
+    for (let i = 0; i < plain.length; i += chunkSize) {
+      const content = plain.slice(i, i + chunkSize).trim();
+      if (content) chunks.push({ heading_path: null, content, tokens_est: Math.max(1, Math.ceil(content.length / 4)) });
+    }
+  }
+  return chunks;
+}
+
+function stripMarkdown(markdown) {
+  return String(markdown || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[>*_~\-]{1,3}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function upsertKnowledgeDocument(env, { title, content, tags = "", sourcePath = null, sourceType = "manual", lang = "ru", isCanonical = 0 }) {
+  await env.CATALOG.prepare("DELETE FROM knowledge WHERE title = ?").bind(title).run();
+  await env.CATALOG.prepare(
+    "INSERT INTO knowledge (title, content, tags) VALUES (?,?,?)"
+  ).bind(title, content, tags).run();
+
+  const normalizedSourcePath = sourcePath || `manual/${title.toLowerCase().replace(/[^a-zа-я0-9]+/gi, "-")}`;
+  const slug = normalizedSourcePath.split("/").filter(Boolean).pop() || title.toLowerCase();
+  const plainText = stripMarkdown(content);
+  const contentHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+  const hashHex = [...new Uint8Array(contentHash)].map(b => b.toString(16).padStart(2, "0")).join("");
+  const frontmatter = JSON.stringify({ imported_via: "worker" });
+
+  await env.CATALOG.prepare(
+    `INSERT INTO kb_documents (
+      source_repo, source_path, source_type, lang, slug, title, section_path,
+      frontmatter_json, raw_markdown, plain_text, content_hash, is_canonical
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(source_path) DO UPDATE SET
+      source_type=excluded.source_type,
+      lang=excluded.lang,
+      slug=excluded.slug,
+      title=excluded.title,
+      section_path=excluded.section_path,
+      frontmatter_json=excluded.frontmatter_json,
+      raw_markdown=excluded.raw_markdown,
+      plain_text=excluded.plain_text,
+      content_hash=excluded.content_hash,
+      is_canonical=excluded.is_canonical,
+      updated_at=CURRENT_TIMESTAMP`
+  ).bind(
+    "bitrix24bot/manual",
+    normalizedSourcePath,
+    sourceType,
+    lang,
+    slug,
+    title,
+    normalizedSourcePath.split("/").slice(0, -1).join("/"),
+    frontmatter,
+    content,
+    plainText,
+    hashHex,
+    isCanonical ? 1 : 0,
+  ).run();
+
+  const docRow = await env.CATALOG.prepare("SELECT id FROM kb_documents WHERE source_path = ?").bind(normalizedSourcePath).first();
+  if (!docRow?.id) return;
+
+  await env.CATALOG.prepare("DELETE FROM kb_document_tags WHERE document_id = ?").bind(docRow.id).run();
+  await env.CATALOG.prepare("DELETE FROM kb_links WHERE document_id = ?").bind(docRow.id).run();
+  await env.CATALOG.prepare("DELETE FROM kb_chunks WHERE document_id = ?").bind(docRow.id).run();
+
+  const normalizedTags = [...new Set(String(tags).split(",").map(t => t.trim()).filter(Boolean))];
+  for (const tag of normalizedTags) {
+    await env.CATALOG.prepare("INSERT INTO kb_tags (name) VALUES (?) ON CONFLICT(name) DO NOTHING").bind(tag).run();
+    const tagRow = await env.CATALOG.prepare("SELECT id FROM kb_tags WHERE name = ?").bind(tag).first();
+    if (tagRow?.id) {
+      await env.CATALOG.prepare(
+        "INSERT OR IGNORE INTO kb_document_tags (document_id, tag_id) VALUES (?, ?)"
+      ).bind(docRow.id, tagRow.id).run();
+    }
+  }
+
+  const chunks = extractHeadingChunks(content);
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    await env.CATALOG.prepare(
+      "INSERT INTO kb_chunks (document_id, chunk_no, heading_path, content, tokens_est) VALUES (?, ?, ?, ?, ?)"
+    ).bind(docRow.id, i, chunk.heading_path, chunk.content, chunk.tokens_est).run();
+  }
+
+  const linkRegex = /\[([^\]]+)\]\((?!https?:|mailto:|#)([^)]+)\)/g;
+  for (const match of content.matchAll(linkRegex)) {
+    await env.CATALOG.prepare(
+      "INSERT INTO kb_links (document_id, target_path, anchor_text, link_type) VALUES (?, ?, ?, 'internal')"
+    ).bind(docRow.id, match[2], match[1]).run();
+  }
+}
+
 // ── Tool executor ─────────────────────────────────────────
 async function executeTool(env, name, args) {
   try {
@@ -321,32 +452,62 @@ async function executeTool(env, name, args) {
         })));
       }
       case "search_knowledge": {
-        // Используем FTS5 для полнотекстового поиска (быстро и точно)
-        // Fallback на LIKE если FTS не вернул результатов
         const ftsQuery = args.query.trim().replace(/['"*]/g, " ").trim();
         let results = [];
         if (ftsQuery) {
           try {
             const fts = await env.CATALOG.prepare(
-              `SELECT k.title, substr(k.content,1,4000) as content, k.tags
-               FROM knowledge k JOIN knowledge_fts ON k.id = knowledge_fts.rowid
-               WHERE knowledge_fts MATCH ?
-               ORDER BY rank LIMIT 3`
+              `SELECT d.title, d.source_path, c.heading_path,
+                      snippet(kb_chunks_fts, 2, '[B]', '[/B]', ' … ', 18) AS snippet,
+                      COALESCE(group_concat(DISTINCT t.name), '') AS tags,
+                      bm25(kb_chunks_fts) AS score
+               FROM kb_chunks_fts
+               JOIN kb_chunks c ON c.id = kb_chunks_fts.rowid
+               JOIN kb_documents d ON d.id = c.document_id
+               LEFT JOIN kb_document_tags dt ON dt.document_id = d.id
+               LEFT JOIN kb_tags t ON t.id = dt.tag_id
+               WHERE kb_chunks_fts MATCH ?
+               GROUP BY c.id
+               ORDER BY score
+               LIMIT 5`
             ).bind(ftsQuery).all();
-            results = fts.results;
+            results = fts.results || [];
           } catch {}
         }
         if (!results.length) {
           const q = `%${args.query}%`;
           const like = await env.CATALOG.prepare(
-            `SELECT title, substr(content,1,4000) as content, tags FROM knowledge
-             WHERE title LIKE ? OR tags LIKE ?
-             LIMIT 3`
+            `SELECT d.title, d.source_path, c.heading_path,
+                    substr(c.content, 1, 400) AS snippet,
+                    COALESCE(group_concat(DISTINCT t.name), '') AS tags,
+                    NULL AS score
+             FROM kb_documents d
+             JOIN kb_chunks c ON c.document_id = d.id
+             LEFT JOIN kb_document_tags dt ON dt.document_id = d.id
+             LEFT JOIN kb_tags t ON t.id = dt.tag_id
+             WHERE d.title LIKE ? OR c.content LIKE ? OR t.name LIKE ?
+             GROUP BY c.id
+             LIMIT 5`
+          ).bind(q, q, q).all();
+          results = like.results || [];
+        }
+        if (!results.length) {
+          const q = `%${args.query}%`;
+          const fallback = await env.CATALOG.prepare(
+            `SELECT title, NULL AS source_path, NULL AS heading_path, substr(content,1,400) AS snippet, tags, NULL AS score
+             FROM knowledge WHERE title LIKE ? OR tags LIKE ? LIMIT 3`
           ).bind(q, q).all();
-          results = like.results;
+          results = fallback.results || [];
         }
         if (!results.length) return JSON.stringify({ found: 0, message: "Информация не найдена в базе знаний" });
-        return JSON.stringify(results.map(r => ({ заголовок: r.title, содержание: r.content, теги: r.tags })));
+        return JSON.stringify(results.map(r => ({
+          заголовок: r.title,
+          путь: r.source_path,
+          секция: r.heading_path,
+          сниппет: r.snippet,
+          теги: r.tags,
+          score: r.score,
+        })));
       }
       case "search_brand": {
         const q = `%${args.name}%`;
@@ -573,10 +734,7 @@ export default {
       for (const doc of docs) {
         const { title, content, tags = "" } = doc;
         if (!title || !content) continue;
-        await env.CATALOG.prepare("DELETE FROM knowledge WHERE title = ?").bind(title).run();
-        await env.CATALOG.prepare(
-          "INSERT INTO knowledge (title, content, tags) VALUES (?,?,?)"
-        ).bind(title, content, tags).run();
+        await upsertKnowledgeDocument(env, { title, content, tags, sourceType: "manual_bulk" });
         inserted++;
       }
       return json({ ok: true, inserted });
@@ -616,11 +774,13 @@ export default {
         const title       = url.searchParams.get("title") ||
                             (meta ? meta.NAME.replace(/_/g, " ").replace(/\.md$/i, "") : "Документ");
         const content     = await (await fetch(downloadUrl)).text();
-        // Удаляем старую версию с таким же заголовком (upsert)
-        await env.CATALOG.prepare("DELETE FROM knowledge WHERE title = ?").bind(title).run();
-        await env.CATALOG.prepare(
-          "INSERT INTO knowledge (title, content, tags) VALUES (?,?,?)"
-        ).bind(title, content, tags).run();
+        await upsertKnowledgeDocument(env, {
+          title,
+          content,
+          tags,
+          sourcePath: fileId ? `bitrix24/disk/${fileId}` : directUrl,
+          sourceType: "manual_import",
+        });
         return json({ ok: true, title, bytes: content.length });
       } catch (e) {
         return json({ error: e.message }, 500);
