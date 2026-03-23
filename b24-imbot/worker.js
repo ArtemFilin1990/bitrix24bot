@@ -110,6 +110,17 @@ const TOOLS = [
       },
       required: ["name"]
     }
+  },
+  {
+    name: "search_analogs",
+    description: "Найти аналоги подшипника по обозначению или бренду. Использовать при вопросах о взаимозаменяемости, аналогах ГОСТ/ISO, заменах импортных на отечественные.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Обозначение или артикул подшипника (например: 6205, 6205-2RS, 180205)" }
+      },
+      required: ["query"]
+    }
   }
 ];
 
@@ -229,6 +240,23 @@ async function executeTool(env, name, args) {
         ).bind(q, q).all();
         if (!results.length) return JSON.stringify({ found: 0, message: "Производитель не найден" });
         return JSON.stringify(results.map(r => ({ бренд: r.name, описание: r.description })));
+      }
+      case "search_analogs": {
+        const q = `%${args.query}%`;
+        const { results } = await env.CATALOG.prepare(
+          `SELECT brand, designation, analog_designation, analog_brand, factory
+           FROM analogs
+           WHERE designation LIKE ? OR analog_designation LIKE ?
+           LIMIT 20`
+        ).bind(q, q).all();
+        if (!results.length) return JSON.stringify({ found: 0, message: "Аналоги не найдены в базе" });
+        return JSON.stringify(results.map(r => ({
+          бренд: r.brand,
+          обозначение: r.designation,
+          аналог: r.analog_designation,
+          бренд_аналога: r.analog_brand,
+          завод: r.factory,
+        })));
       }
       default:
         return JSON.stringify({ error: "Unknown tool: " + name });
@@ -477,6 +505,84 @@ export default {
           "INSERT INTO knowledge (title, content, tags) VALUES (?,?,?)"
         ).bind(title, content, tags).run();
         return json({ ok: true, title, bytes: content.length });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // Просмотр первых строк файла из Bitrix24 Disk
+    // GET /preview-file?file_id=<id>&secret=<IMPORT_SECRET>&lines=10
+    if (url.pathname === "/preview-file" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const fileId    = url.searchParams.get("file_id");
+      const directUrl = url.searchParams.get("url");
+      const n         = parseInt(url.searchParams.get("lines") || "10");
+      if (!fileId && !directUrl) return json({ error: "file_id or url required" }, 400);
+      try {
+        const downloadUrl = directUrl || (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
+        const text = await (await fetch(downloadUrl)).text();
+        const lines = text.replace(/^\uFEFF/, "").split("\n").slice(0, n);
+        return json({ lines, total_chars: text.length });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // Импорт аналогов из CSV файла Bitrix24 Disk в таблицу analogs
+    // GET /import-analogs?file_id=<id>&secret=<IMPORT_SECRET>[&sep=;&col_brand=0&col_desig=1&col_adesig=2&col_abrand=3&col_factory=4]
+    if (url.pathname === "/import-analogs" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const fileId    = url.searchParams.get("file_id");
+      const directUrl = url.searchParams.get("url");
+      if (!fileId && !directUrl) return json({ error: "file_id or url required" }, 400);
+      const sep = url.searchParams.get("sep") || ";";
+      try {
+        const downloadUrl = directUrl || (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
+        const text = await (await fetch(downloadUrl)).text();
+        const lines = text.replace(/^\uFEFF/, "").split("\n").filter(l => l.trim());
+        const header = lines[0].split(sep).map(h => h.trim().toLowerCase());
+
+        // Автодетект колонок по ключевым словам
+        const find = (...kws) => header.findIndex(h => kws.some(kw => h.includes(kw)));
+        const iBrand   = url.searchParams.has("col_brand")   ? +url.searchParams.get("col_brand")   : find("бренд", "марка", "brand");
+        const iDesig   = url.searchParams.has("col_desig")   ? +url.searchParams.get("col_desig")   : find("обозначен", "артикул", "designation", "номер");
+        const iADesig  = url.searchParams.has("col_adesig")  ? +url.searchParams.get("col_adesig")  : find("аналог", "analog");
+        const iABrand  = url.searchParams.has("col_abrand")  ? +url.searchParams.get("col_abrand")  : find("произв", "завод", "factory", "manufacturer");
+        const iFactory = url.searchParams.has("col_factory") ? +url.searchParams.get("col_factory") : -1;
+
+        const detected = { header, iBrand, iDesig, iADesig, iABrand, iFactory };
+        if (url.searchParams.get("dry_run") === "1") {
+          return json({ detected, sample: lines.slice(1, 4).map(l => l.split(sep)) });
+        }
+
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cols   = lines[i].split(sep);
+          const brand  = (cols[iBrand]   || "").trim();
+          const desig  = (cols[iDesig]   || "").trim();
+          const aDesig = (cols[iADesig]  || "").trim();
+          const aBrand = (cols[iABrand]  || "").trim();
+          const factory= iFactory >= 0 ? (cols[iFactory] || "").trim() : "";
+          if (desig || aDesig) rows.push({ brand, desig, aDesig, aBrand, factory });
+        }
+
+        await env.CATALOG.prepare("DELETE FROM analogs").run();
+        const BATCH = 20;
+        let inserted = 0;
+        for (let i = 0; i < rows.length; i += BATCH) {
+          const batch = rows.slice(i, i + BATCH);
+          const ph    = batch.map(() => "(?,?,?,?,?)").join(",");
+          const vals  = batch.flatMap(r => [r.brand, r.desig, r.aDesig, r.aBrand, r.factory]);
+          await env.CATALOG.prepare(
+            `INSERT INTO analogs (brand,designation,analog_designation,analog_brand,factory) VALUES ${ph}`
+          ).bind(...vals).run();
+          inserted += batch.length;
+        }
+        return json({ ok: true, inserted, total: rows.length, detected });
       } catch (e) {
         return json({ error: e.message }, 500);
       }
