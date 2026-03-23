@@ -574,7 +574,9 @@ export default {
         const text = await (await fetch(downloadUrl)).text();
         const lines = text.replace(/^\uFEFF/, "").split("\n").filter(l => l.trim());
         const header = lines[0].split(sep).map(h => h.trim());
-        const hi = h => header.findIndex(c => c.toLowerCase().includes(h));
+        const hi   = h => header.findIndex(c => c.toLowerCase().includes(h));
+        // Case-sensitive поиск нужен для d/D (внутр/наружный диаметр)
+        const hiCS = h => header.findIndex(c => c.includes(h));
 
         const cols = {
           item_id:         url.searchParams.get("c_item_id")    ?? String(hi("id") >= 0 ? hi("id") : 0),
@@ -587,9 +589,9 @@ export default {
           iso_ref:         url.searchParams.get("c_iso")        ?? String(hi("iso")),
           gost_ref:        url.searchParams.get("c_gost")       ?? String(hi("гост")),
           section:         url.searchParams.get("c_section")    ?? String(hi("секция") >= 0 ? hi("секция") : hi("тип")),
-          d_mm:            url.searchParams.get("c_d")          ?? String(hi(" d ") >= 0 ? hi(" d ") : hi("внутр")),
-          big_d_mm:        url.searchParams.get("c_D")          ?? String(hi(" d ") >= 0 ? hi(" d,") : hi("наруж")),
-          b_mm:            url.searchParams.get("c_b")          ?? String(hi(" b ") >= 0 ? hi(" b ") : hi("шири")),
+          d_mm:            url.searchParams.get("c_d")          ?? String(hiCS(" d ") >= 0 ? hiCS(" d ") : hi("внутр")),
+          big_d_mm:        url.searchParams.get("c_D")          ?? String(hiCS(" D ") >= 0 ? hiCS(" D ") : hi("наруж")),
+          b_mm:            url.searchParams.get("c_b")          ?? String(hiCS(" b ") >= 0 ? hiCS(" b ") : hi("шири")),
           t_mm:            url.searchParams.get("c_t")          ?? String(hi(" t ")),
           mass_kg:         url.searchParams.get("c_mass")       ?? String(hi("масс") >= 0 ? hi("масс") : hi("вес")),
           analog_ref:      url.searchParams.get("c_analog")     ?? String(hi("аналог")),
@@ -665,67 +667,98 @@ export default {
       }
     }
 
-    // Импорт каталога из Bitrix24 CRM (catalog.product.list)
-    // GET /import-catalog-crm?secret=<IMPORT_SECRET>[&section_id=<id>&limit=500]
+    // Импорт каталога из Bitrix24
+    // Без iblock_id → crm.product.list (CRM каталог, всегда доступен)
+    // С iblock_id → catalog.product.list (торговый каталог, нужен scope:catalog)
+    // GET /import-catalog-crm?secret=<S>[&iblock_id=23&section_id=<id>&limit=2000&dry_run=1]
     if (url.pathname === "/import-catalog-crm" && request.method === "GET") {
       if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
         return json({ error: "Forbidden" }, 403);
       }
+      const iblockId  = url.searchParams.get("iblock_id") ? parseInt(url.searchParams.get("iblock_id")) : null;
       const sectionId = url.searchParams.get("section_id") || null;
       const maxItems  = parseInt(url.searchParams.get("limit") || "2000");
       const truncate  = url.searchParams.get("truncate") !== "0";
+      const dryRun    = url.searchParams.get("dry_run") === "1";
       try {
-        if (truncate) await env.CATALOG.prepare("DELETE FROM catalog").run();
+        if (truncate && !dryRun) await env.CATALOG.prepare("DELETE FROM catalog").run();
 
-        const SELECT = [
-          "ID","NAME","PROPERTY_MANUFACTURER","PROPERTY_DESIGNATION",
-          "PROPERTY_GOST","PROPERTY_ISO","PROPERTY_D","PROPERTY_BIG_D",
-          "PROPERTY_B","PROPERTY_T","PROPERTY_MASS","PROPERTY_ANALOG",
-          "PROPERTY_SUFFIX","PRICE","CATALOG_QUANTITY","CATALOG_AVAILABLE",
-          "IBLOCK_SECTION_ID",
-        ];
         let start = 0, inserted = 0, hasMore = true;
+
         while (hasMore && inserted < maxItems) {
-          const filter = sectionId ? { IBLOCK_SECTION_ID: sectionId } : {};
-          // b24() returns d.result; for list calls we need raw response for pagination
-          const rawUrl = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/catalog.product.list.json`;
-          const rawResp = await fetch(rawUrl, {
+          let endpoint, body;
+          if (iblockId) {
+            // catalog.product.list требует iblockId в filter и select
+            endpoint = "catalog.product.list";
+            body = {
+              filter: { iblockId, ...(sectionId ? { iblockSectionId: sectionId } : {}) },
+              select: ["id","iblockId","name","iblockSectionId","quantity","available",
+                       "weight","purchasingPrice"],
+              start,
+            };
+          } else {
+            // crm.product.list — CRM каталог, поля UPPERCASE, свойства PROPERTY_CODE
+            endpoint = "crm.product.list";
+            body = {
+              filter: sectionId ? { SECTION_ID: sectionId } : {},
+              select: ["ID","NAME","PRICE","CURRENCY_ID","SECTION_ID",
+                       "PROPERTY_MANUFACTURER","PROPERTY_DESIGNATION","PROPERTY_GOST",
+                       "PROPERTY_ISO","PROPERTY_D","PROPERTY_BIG_D","PROPERTY_B",
+                       "PROPERTY_T","PROPERTY_MASS","PROPERTY_ANALOG","PROPERTY_SUFFIX"],
+              start,
+            };
+          }
+
+          const apiUrl = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${endpoint}.json`;
+          const resp   = await fetch(apiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ filter, select: SELECT, start }),
+            body: JSON.stringify(body),
           });
-          const rawData = await rawResp.json();
-          if (rawData.error) throw new Error(`B24 catalog.product.list: ${rawData.error}`);
-          const items = rawData.result?.products ?? rawData.result ?? [];
+          const data = await resp.json();
+          if (data.error) throw new Error(`${endpoint}: ${data.error} (hint: для catalog.product.list нужен iblock_id)`);
+
+          const items = data.result?.products ?? data.result ?? [];
           if (!items.length) break;
+
+          if (dryRun) return json({ dry_run: true, endpoint, sample: items.slice(0, 2) });
 
           const BATCH = 10;
           for (let i = 0; i < items.length; i += BATCH) {
             const batch = items.slice(i, i + BATCH);
             const ph = batch.map(() => "("+Array(24).fill("?").join(",")+")").join(",");
             const vals = batch.flatMap(p => {
-              const prop = name => p[name]?.[0]?.value ?? p[name] ?? null;
-              const num  = name => parseFloat(String(prop(name) || "").replace(",",".")) || null;
-              return [
-                String(p.ID || p.id || ""),
-                String(prop("PROPERTY_MANUFACTURER") || prop("manufacturer") || ""),
-                "", "", "",  // category, subcategory, series (заполняются при CSV-импорте)
-                String(p.NAME || p.name || ""),
-                String(prop("PROPERTY_DESIGNATION") || prop("designation") || p.NAME || ""),
-                String(prop("PROPERTY_ISO") || prop("isoRef") || ""),
-                "",
-                num("PROPERTY_D") ?? num("d"), num("PROPERTY_BIG_D") ?? num("bigD"),
-                num("PROPERTY_B") ?? num("b"), num("PROPERTY_T") ?? num("t"),
-                num("PROPERTY_MASS") ?? num("mass"),
-                String(prop("PROPERTY_ANALOG") || prop("analogRef") || ""),
-                num("PRICE") ?? num("price"),
-                parseInt(prop("CATALOG_QUANTITY") ?? prop("quantity")) || null,
-                (prop("CATALOG_AVAILABLE") ?? prop("available")) === "Y" ? 1 : 0,
-                String(p.IBLOCK_SECTION_ID || p.iblockSectionId || ""), "", "",
-                String(prop("PROPERTY_GOST") || prop("gostRef") || ""),
-                "",
-                String(prop("PROPERTY_SUFFIX") || prop("suffixDesc") || ""),
-              ];
+              if (iblockId) {
+                // catalog.product.list → camelCase, свойства через propertyXxx
+                const v = n => { const x = p[n]; return Array.isArray(x) ? x[0]?.value ?? null : x?.value ?? x ?? null; };
+                const n = k => parseFloat(String(v(k)||"").replace(",",".")) || null;
+                return [String(p.id||""), String(v("propertyManufacturer")||""),
+                  "","","", String(p.name||""), String(v("propertyDesignation")||p.name||""),
+                  String(v("propertyIso")||""), "",
+                  n("propertyD"), n("propertyBigD"), n("propertyB"), n("propertyT"),
+                  parseFloat(String(p.weight||"").replace(",",".")) || null,
+                  String(v("propertyAnalog")||""),
+                  parseFloat(String(p.purchasingPrice||"").replace(",",".")) || null,
+                  parseInt(p.quantity)||null, p.available==="Y"?1:0,
+                  String(p.iblockSectionId||""),"","",
+                  String(v("propertyGost")||""),"",
+                  String(v("propertySuffix")||"")];
+              } else {
+                // crm.product.list → UPPERCASE, PROPERTY_CODE_VALUE или PROPERTY_CODE
+                const v = c => { const x = p[c+"_VALUE"] ?? p[c]; return Array.isArray(x) ? x[0]?.value??x[0] : x ?? null; };
+                const n = c => parseFloat(String(v(c)||"").replace(",",".")) || null;
+                return [String(p.ID||""), String(v("PROPERTY_MANUFACTURER")||""),
+                  "","","", String(p.NAME||""), String(v("PROPERTY_DESIGNATION")||p.NAME||""),
+                  String(v("PROPERTY_ISO")||""), "",
+                  n("PROPERTY_D"), n("PROPERTY_BIG_D"), n("PROPERTY_B"), n("PROPERTY_T"),
+                  n("PROPERTY_MASS"),
+                  String(v("PROPERTY_ANALOG")||""),
+                  parseFloat(String(p.PRICE||"").replace(",",".")) || null,
+                  null, null, // qty/stock недоступны в crm.product.list
+                  String(p.SECTION_ID||""),"","",
+                  String(v("PROPERTY_GOST")||""),"",
+                  String(v("PROPERTY_SUFFIX")||"")];
+              }
             });
             await env.CATALOG.prepare(
               `INSERT OR REPLACE INTO catalog
@@ -736,11 +769,10 @@ export default {
             ).bind(...vals).run();
           }
           inserted += items.length;
-          // Пагинация: B24 возвращает next если есть ещё страницы
-          hasMore = rawData.next != null;
-          start = rawData.next ?? (start + items.length);
+          hasMore = data.next != null;
+          start = data.next ?? (start + items.length);
         }
-        return json({ ok: true, inserted });
+        return json({ ok: true, endpoint: iblockId ? "catalog.product.list" : "crm.product.list", inserted });
       } catch (e) {
         return json({ error: e.message }, 500);
       }
@@ -819,6 +851,28 @@ export default {
           inserted += batch.length;
         }
         return json({ ok: true, inserted, total: rows.length, detected });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // Поиск iblock_id и catalog_id для import-catalog-crm
+    // GET /discover-catalog?secret=<IMPORT_SECRET>
+    if (url.pathname === "/discover-catalog" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      try {
+        // crm.catalog.list — список CRM каталогов
+        const crmCatalogs = await b24(env, "crm.catalog.list", { select: ["ID","NAME","IBLOCK_ID"] });
+        // catalog.catalog.list — список торговых каталогов (для catalog.product.list)
+        let tradeCatalogs = [];
+        try {
+          const tc = await b24(env, "catalog.catalog.list", { select: ["id","iblockId","name","siteId"] });
+          tradeCatalogs = tc?.catalogs ?? tc ?? [];
+        } catch {}
+        return json({ crm_catalogs: crmCatalogs, trade_catalogs: tradeCatalogs,
+          hint: "crm_catalogs → используй /import-catalog-crm без iblock_id; trade_catalogs → добавь &iblock_id=<iblockId>" });
       } catch (e) {
         return json({ error: e.message }, 500);
       }
