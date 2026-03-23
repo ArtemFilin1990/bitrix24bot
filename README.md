@@ -107,11 +107,25 @@ GET /import-catalog-csv?file_id=<ID>&secret=<IMPORT_SECRET>
 GET /import-catalog-csv?file_id=<ID>&secret=<IMPORT_SECRET>&c_desig=3&c_d=8&c_D=9
 ```
 
-### Импорт каталога из Bitrix24 CRM (`catalog.product.list`)
+### Импорт каталога из Bitrix24 CRM
 
+**Шаг 0 — найти ID каталога:**
 ```
+GET /discover-catalog?secret=<IMPORT_SECRET>
+```
+Вернёт `crm_catalogs` (для `crm.product.list`) и `trade_catalogs` (для `catalog.product.list`).
+
+**CRM-каталог** (`crm.product.list`, всегда доступен, нет qty/stock):
+```
+GET /import-catalog-crm?secret=<IMPORT_SECRET>&dry_run=1
 GET /import-catalog-crm?secret=<IMPORT_SECRET>
 GET /import-catalog-crm?secret=<IMPORT_SECRET>&section_id=42&limit=500
+```
+
+**Торговый каталог** (`catalog.product.list`, нужен scope `catalog` и `iblock_id`):
+```
+GET /import-catalog-crm?secret=<IMPORT_SECRET>&iblock_id=23&dry_run=1
+GET /import-catalog-crm?secret=<IMPORT_SECRET>&iblock_id=23
 ```
 
 ### Импорт аналогов CSV → таблица `analogs`
