@@ -97,7 +97,7 @@ async function b24(env, method, params = {}) {
 async function botReply(env, chatId, text) {
   await b24(env, "imbot.message.add", {
     BOT_ID:    env.BOT_ID,
-    CLIENT_ID: "everest_ai_bot",
+    CLIENT_ID: env.CLIENT_ID,
     DIALOG_ID: chatId,
     MESSAGE:   text,
   });
