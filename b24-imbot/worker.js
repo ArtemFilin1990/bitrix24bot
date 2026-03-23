@@ -179,7 +179,7 @@ const GEMINI_TOOLS = [{
 }];
 
 async function askGemini(env, history, userText) {
-  const MODEL = env.GEMINI_MODEL || "gemini-1.5-flash";
+  const MODEL = env.GEMINI_MODEL || "gemini-2.0-flash-lite";
   const URL   = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
 
   const contents = [
