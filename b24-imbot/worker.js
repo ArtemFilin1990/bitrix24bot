@@ -278,46 +278,76 @@ async function executeTool(env, name, args) {
         })));
       }
       case "search_catalog": {
-        const q = `%${args.query}%`;
-        // Сначала ищем в расширенном каталоге с ценами и остатками
-        const { results: catRows } = await env.CATALOG.prepare(
-          `SELECT manufacturer, designation, name_ru, category_ru, subcategory_ru,
-                  d_mm, big_d_mm, b_mm, mass_kg, price_rub, qty, stock_flag,
-                  gost_ref, iso_ref, brand_display, suffix_desc
-           FROM catalog
-           WHERE designation LIKE ? OR name_ru LIKE ? OR gost_ref LIKE ? OR iso_ref LIKE ?
-           ORDER BY stock_flag DESC, qty DESC
-           LIMIT 10`
-        ).bind(q, q, q, q).all();
+        const raw = args.query.trim();
+        const q   = `%${raw}%`;
+
+        // Попытка распарсить запрос по размерам: "25 52 15" или "25x52x15" или "25×52×15"
+        const dimMatch = raw.replace(/[×xXхХ]/g, " ").split(/\s+/).map(Number).filter(n => n > 0 && n < 1000);
+
+        let catRows = [];
+
+        if (dimMatch.length >= 2) {
+          // Поиск по d×D или d×D×B в таблице catalog (ISO размеры)
+          const [d, D, B] = dimMatch;
+          const dimSql = B
+            ? `SELECT item_id as designation, category_ru, series_ru, d_mm, big_d_mm, b_mm, mass_kg, brand_display as manufacturer,
+                      NULL as name_ru, NULL as price_rub, NULL as qty, NULL as stock_flag,
+                      NULL as gost_ref, NULL as iso_ref, NULL as suffix_desc
+               FROM catalog WHERE d_mm=? AND big_d_mm=? AND b_mm=? LIMIT 10`
+            : `SELECT item_id as designation, category_ru, series_ru, d_mm, big_d_mm, b_mm, mass_kg, brand_display as manufacturer,
+                      NULL as name_ru, NULL as price_rub, NULL as qty, NULL as stock_flag,
+                      NULL as gost_ref, NULL as iso_ref, NULL as suffix_desc
+               FROM catalog WHERE d_mm=? AND big_d_mm=? LIMIT 10`;
+          const dimRes = B
+            ? await env.CATALOG.prepare(dimSql).bind(d, D, B).all()
+            : await env.CATALOG.prepare(dimSql).bind(d, D).all();
+          catRows = dimRes.results || [];
+        }
+
+        // Обычный текстовый поиск в CRM каталоге (с ценами)
+        if (!catRows.length) {
+          const res = await env.CATALOG.prepare(
+            `SELECT manufacturer, designation, name_ru, category_ru, subcategory_ru,
+                    d_mm, big_d_mm, b_mm, mass_kg, price_rub, qty, stock_flag,
+                    gost_ref, iso_ref, brand_display, suffix_desc
+             FROM catalog
+             WHERE item_id = ? OR designation LIKE ? OR name_ru LIKE ? OR gost_ref LIKE ? OR iso_ref LIKE ?
+             ORDER BY stock_flag DESC, qty DESC
+             LIMIT 10`
+          ).bind(raw, q, q, q, q).all();
+          catRows = res.results || [];
+        }
+
         if (catRows.length) {
           return JSON.stringify(catRows.map(r => ({
-            производитель: r.manufacturer,
-            обозначение: r.designation,
-            наименование: r.name_ru,
-            категория: [r.category_ru, r.subcategory_ru].filter(Boolean).join(" / "),
+            производитель: r.manufacturer || r.brand_display,
+            обозначение:   r.designation,
+            наименование:  r.name_ru || r.category_ru,
+            серия:         r.series_ru,
             d_мм: r.d_mm, D_мм: r.big_d_mm, B_мм: r.b_mm,
-            масса_кг: r.mass_kg,
-            цена_руб: r.price_rub,
-            кол_во: r.qty,
+            масса_кг:  r.mass_kg,
+            цена_руб:  r.price_rub,
+            кол_во:    r.qty,
             в_наличии: r.stock_flag ? "да" : "нет",
-            гост: r.gost_ref, iso: r.iso_ref,
-            бренд: r.brand_display,
-            суффикс: r.suffix_desc,
+            гост:      r.gost_ref,
+            iso:       r.iso_ref,
+            суффикс:   r.suffix_desc,
           })));
         }
-        // Запасной вариант — упрощённая таблица bearings
+
+        // Запасной вариант — таблица bearings (из CRM Bitrix24)
         const { results } = await env.CATALOG.prepare(
-          `SELECT name, article, brand, weight
-           FROM bearings
-           WHERE name LIKE ? OR article LIKE ?
+          `SELECT name, article, brand, weight FROM bearings
+           WHERE article = ? OR name LIKE ? OR article LIKE ?
+           ORDER BY CASE WHEN article = ? THEN 0 ELSE 1 END
            LIMIT 10`
-        ).bind(q, q).all();
-        if (!results.length) return JSON.stringify({ found: 0, message: "Подшипник не найден в базе" });
+        ).bind(raw, q, q, raw).all();
+        if (!results.length) return JSON.stringify({ found: 0, message: "Подшипник не найден в каталоге" });
         return JSON.stringify(results.map(r => ({
           наименование: r.name,
-          артикул: r.article,
-          завод: r.brand,
-          вес_кг: r.weight,
+          артикул:      r.article,
+          завод:        r.brand,
+          вес_кг:       r.weight,
         })));
       }
       case "search_knowledge": {
