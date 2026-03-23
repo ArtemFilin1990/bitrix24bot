@@ -253,12 +253,30 @@ async function executeTool(env, name, args) {
         })));
       }
       case "search_knowledge": {
-        const q = `%${args.query}%`;
-        const { results } = await env.CATALOG.prepare(
-          `SELECT title, substr(content,1,4000) as content, tags FROM knowledge
-           WHERE title LIKE ? OR content LIKE ? OR tags LIKE ?
-           LIMIT 3`
-        ).bind(q, q, q).all();
+        // Используем FTS5 для полнотекстового поиска (быстро и точно)
+        // Fallback на LIKE если FTS не вернул результатов
+        const ftsQuery = args.query.trim().replace(/['"*]/g, " ").trim();
+        let results = [];
+        if (ftsQuery) {
+          try {
+            const fts = await env.CATALOG.prepare(
+              `SELECT k.title, substr(k.content,1,4000) as content, k.tags
+               FROM knowledge k JOIN knowledge_fts ON k.id = knowledge_fts.rowid
+               WHERE knowledge_fts MATCH ?
+               ORDER BY rank LIMIT 3`
+            ).bind(ftsQuery).all();
+            results = fts.results;
+          } catch {}
+        }
+        if (!results.length) {
+          const q = `%${args.query}%`;
+          const like = await env.CATALOG.prepare(
+            `SELECT title, substr(content,1,4000) as content, tags FROM knowledge
+             WHERE title LIKE ? OR tags LIKE ?
+             LIMIT 3`
+          ).bind(q, q).all();
+          results = like.results;
+        }
         if (!results.length) return JSON.stringify({ found: 0, message: "Информация не найдена в базе знаний" });
         return JSON.stringify(results.map(r => ({ заголовок: r.title, содержание: r.content, теги: r.tags })));
       }
