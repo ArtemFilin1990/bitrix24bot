@@ -91,13 +91,24 @@ const TOOLS = [
   },
   {
     name: "search_knowledge",
-    description: "Найти информацию в базе знаний: статьи о заводах, брендах, производстве, технических характеристиках. Использовать при вопросах о производителях, истории, качестве продукции.",
+    description: "Найти информацию в базе знаний: технические каталоги, статьи о производстве, ГОСТ/ISO таблицы, аналоги. Использовать при вопросах о размерах, типах подшипников, стандартах.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Поисковый запрос (например: FKL завод, производство, качество)" }
+        query: { type: "string", description: "Поисковый запрос (например: ГОСТ 7242 таблица, конический подшипник размеры)" }
       },
       required: ["query"]
+    }
+  },
+  {
+    name: "search_brand",
+    description: "Получить информацию о производителе подшипников: история, специализация, страна. Использовать при вопросах о конкретном бренде/заводе.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Название бренда/производителя (например: SKF, FAG, ZKL, ГПЗ)" }
+      },
+      required: ["name"]
     }
   }
 ];
@@ -202,12 +213,22 @@ async function executeTool(env, name, args) {
       case "search_knowledge": {
         const q = `%${args.query}%`;
         const { results } = await env.CATALOG.prepare(
-          `SELECT title, content, tags FROM knowledge
+          `SELECT title, substr(content,1,4000) as content, tags FROM knowledge
            WHERE title LIKE ? OR content LIKE ? OR tags LIKE ?
            LIMIT 3`
         ).bind(q, q, q).all();
         if (!results.length) return JSON.stringify({ found: 0, message: "Информация не найдена в базе знаний" });
         return JSON.stringify(results.map(r => ({ заголовок: r.title, содержание: r.content, теги: r.tags })));
+      }
+      case "search_brand": {
+        const q = `%${args.name}%`;
+        const { results } = await env.CATALOG.prepare(
+          `SELECT name, substr(description,1,2000) as description FROM brands
+           WHERE name LIKE ? OR description LIKE ?
+           LIMIT 3`
+        ).bind(q, q).all();
+        if (!results.length) return JSON.stringify({ found: 0, message: "Производитель не найден" });
+        return JSON.stringify(results.map(r => ({ бренд: r.name, описание: r.description })));
       }
       default:
         return JSON.stringify({ error: "Unknown tool: " + name });
@@ -396,6 +417,42 @@ export default {
       } catch (e) {
         return json({ error: e.message }, 500);
       }
+    }
+
+    // Bulk-импорт документов: POST /import-doc-bulk {secret, docs:[{title,content,tags}]}
+    if (url.pathname === "/import-doc-bulk" && request.method === "POST") {
+      const body = await request.json();
+      if (body.secret !== env.IMPORT_SECRET) return json({ error: "Forbidden" }, 403);
+      const docs = body.docs || [];
+      let inserted = 0;
+      for (const doc of docs) {
+        const { title, content, tags = "" } = doc;
+        if (!title || !content) continue;
+        await env.CATALOG.prepare("DELETE FROM knowledge WHERE title = ?").bind(title).run();
+        await env.CATALOG.prepare(
+          "INSERT INTO knowledge (title, content, tags) VALUES (?,?,?)"
+        ).bind(title, content, tags).run();
+        inserted++;
+      }
+      return json({ ok: true, inserted });
+    }
+
+    // Bulk-импорт брендов: POST /import-brands-bulk {secret, brands:[{name,description,logo_url,search_url}]}
+    if (url.pathname === "/import-brands-bulk" && request.method === "POST") {
+      const body = await request.json();
+      if (body.secret !== env.IMPORT_SECRET) return json({ error: "Forbidden" }, 403);
+      let inserted = 0;
+      for (const b of (body.brands || [])) {
+        const { name, description = "", logo_url = "", search_url = "" } = b;
+        if (!name) continue;
+        await env.CATALOG.prepare(
+          `INSERT INTO brands (name,description,logo_url,search_url) VALUES (?,?,?,?)
+           ON CONFLICT(name) DO UPDATE SET description=excluded.description,
+           logo_url=excluded.logo_url, search_url=excluded.search_url`
+        ).bind(name, description, logo_url, search_url).run();
+        inserted++;
+      }
+      return json({ ok: true, inserted });
     }
 
     // Импорт MD-документа в базу знаний из Bitrix24 Disk
