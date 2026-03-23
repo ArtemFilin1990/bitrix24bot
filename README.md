@@ -37,9 +37,9 @@ wrangler d1 create bearings-catalog
 wrangler d1 execute bearings-catalog --file=schema.sql
 ```
 
-Файл `schema.sql` теперь не только создаёт структуру, но и загружает стартовые справочные данные для таблиц `bearings`, `catalog`, `analogs` и `brands` из проекта BearingsInfo, а также импортирует снимок `knowledge` из репозитория `ArtemFilin1990/knowledge-base` (раздел `kb/ru`, 300 markdown-документов на снимке от 2026-03-23 UTC).
+Файл `schema.sql` создаёт структуру D1, включая новый нормализованный ingestion-слой `kb_*` поверх legacy-таблицы `knowledge`. Базовый snapshot каталога и брендов остаётся в `schema.sql`, а knowledge seed теперь нужно собирать отдельно генератором, чтобы сохранить структуру репозитория `ArtemFilin1990/knowledge-base`.
 
-Если база знаний в `knowledge-base` обновилась, перегенерируйте и повторно выполните `wrangler d1 execute bearings-catalog --file=schema.sql`, чтобы обновить таблицу `knowledge` и FTS-индекс.
+Если база знаний в `knowledge-base` обновилась, сначала перегенерируйте SQL-сид через `scripts/build_kb_seed.py`, затем повторно выполните `wrangler d1 execute bearings-catalog --file=schema.sql` и `wrangler d1 execute bearings-catalog --file=data/kb_seed.sql`, чтобы обновить `kb_documents`, `kb_chunks`, compatibility-таблицу `knowledge` и FTS-индексы.
 
 Или через Cloudflare Dashboard → D1 → Console (выполнить SQL из раздела «Схема» ниже).
 
@@ -159,6 +159,51 @@ POST /import-brands-bulk
 ```
 
 ---
+
+
+## Обновление базы знаний из `knowledge-base`
+
+```bash
+# 1. Получить или обновить локальную копию knowledge-base
+#    (путь можно выбрать любой; ниже пример с соседней папкой)
+git clone https://github.com/ArtemFilin1990/knowledge-base ../knowledge-base
+
+# 2. Сгенерировать нормализованный сид
+python scripts/build_kb_seed.py   --source-dir ../knowledge-base   --output data/kb_seed.sql   --source-snapshot "knowledge-base@$(git -C ../knowledge-base rev-parse --short HEAD)"
+
+# 3. Применить схему и сид в D1
+wrangler d1 execute bearings-catalog --file=schema.sql
+wrangler d1 execute bearings-catalog --file=data/kb_seed.sql
+```
+
+### Что именно импортируется
+
+* `kb/ru/**/README.md` → `kb_documents.source_type='article'`, `is_canonical=1`.
+* `prompts/**/*.md` → `source_type='prompt'`.
+* `_templates/**/*.md` → `source_type='template'`.
+* `_meta/**/*.md` → `source_type='meta'`.
+* `inbox/**`, `.github/**`, `.vscode/**`, `scripts/**`, `tests/**` и не-markdown файлы по умолчанию не попадают в production seed.
+
+### Новые таблицы ingestion-слоя
+
+* `kb_documents` — документ целиком: путь, тип, язык, slug, markdown/plain text, hash, frontmatter.
+* `kb_chunks` — детерминированные чанки по H1/H2/H3 или стабильным блокам.
+* `kb_tags`, `kb_document_tags` — нормализованные теги.
+* `kb_links` — внутренние ссылки между документами.
+* `kb_ingest_runs` — аудит импортов.
+* `kb_chunks_fts` — FTS5 индекс по чанкам.
+
+Legacy-таблица `knowledge` сохранена как compatibility-layer для текущего бота и наполняется каноническими `article`-документами.
+
+### Проверка импорта
+
+```bash
+python -m unittest tests/test_build_kb_seed.py
+sqlite3 /tmp/kb.db < schema.sql
+sqlite3 /tmp/kb.db < data/kb_seed.sql
+sqlite3 /tmp/kb.db "SELECT source_type, COUNT(*) FROM kb_documents GROUP BY source_type;"
+sqlite3 /tmp/kb.db "SELECT title, heading_path FROM kb_chunks_fts WHERE kb_chunks_fts MATCH 'монтаж' LIMIT 5;"
+```
 
 ## Команды бота
 
