@@ -21,7 +21,7 @@ class BuildKbSeedTests(unittest.TestCase):
 
     def prepare_db(self, seed_sql: Path):
         conn = sqlite3.connect(':memory:')
-        conn.executescript(SCHEMA.read_text(encoding='utf-8').split('-- Seed reference data from BearingsInfo repository')[0])
+        conn.executescript(SCHEMA.read_text(encoding='utf-8'))
         conn.executescript(seed_sql.read_text(encoding='utf-8'))
         return conn
 
@@ -31,9 +31,10 @@ class BuildKbSeedTests(unittest.TestCase):
             self.build_seed(seed)
             conn = self.prepare_db(seed)
             cur = conn.cursor()
-            self.assertEqual(cur.execute('SELECT COUNT(*) FROM kb_documents').fetchone()[0], 4)
+            self.assertEqual(cur.execute('SELECT COUNT(*) FROM kb_documents').fetchone()[0], 5)
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM kb_documents WHERE source_type = 'article' AND is_canonical = 1").fetchone()[0], 1)
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM kb_documents WHERE source_path LIKE 'inbox/%'").fetchone()[0], 0)
+            self.assertEqual(cur.execute("SELECT COUNT(*) FROM kb_documents WHERE source_type = 'meta' AND source_path = '_meta/topics.json'").fetchone()[0], 1)
             self.assertGreater(cur.execute('SELECT COUNT(*) FROM kb_chunks').fetchone()[0], 1)
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM knowledge WHERE title = 'Тестовая статья'").fetchone()[0], 1)
             self.assertGreater(cur.execute("SELECT COUNT(*) FROM kb_links WHERE target_path = '../other/README.md'").fetchone()[0], 0)
@@ -45,7 +46,7 @@ class BuildKbSeedTests(unittest.TestCase):
             conn = self.prepare_db(seed)
             conn.executescript(seed.read_text(encoding='utf-8'))
             cur = conn.cursor()
-            self.assertEqual(cur.execute('SELECT COUNT(*) FROM kb_documents').fetchone()[0], 4)
+            self.assertEqual(cur.execute('SELECT COUNT(*) FROM kb_documents').fetchone()[0], 5)
             self.assertEqual(cur.execute('SELECT COUNT(*) FROM kb_ingest_runs').fetchone()[0], 2)
 
     def test_fts_search_returns_chunk_rows(self):

@@ -114,13 +114,17 @@ def chunk_markdown(text: str, chunk_size: int = 1200) -> list[dict]:
 
 def classify(rel_path: str) -> tuple[str, int, str] | None:
     path = rel_path.replace('\\', '/')
-    if path.startswith('kb/ru/') and path.endswith('/README.md'):
+    if path.startswith('inbox/') or path.startswith('scripts/') or path.startswith('tests/') or path.startswith('.github/') or path.startswith('.vscode/'):
+        return None
+    if path.startswith('kb/ru/') and path.endswith(('/README.md', '/INDEX.md')):
+        return 'article', 1, 'ru'
+    if path == 'kb/ru/INDEX.md':
         return 'article', 1, 'ru'
     if path.startswith('prompts/') and path.endswith('.md'):
         return 'prompt', 0, 'ru'
     if path.startswith('_templates/') and path.endswith('.md'):
         return 'template', 0, 'ru'
-    if path.startswith('_meta/') and path.endswith('.md'):
+    if path.startswith('_meta/') and path.endswith(('.md', '.json')):
         return 'meta', 0, 'ru'
     return None
 
@@ -146,8 +150,9 @@ def build_documents(source_dir: Path, source_repo: str) -> tuple[list[Document],
         loaded += 1
         raw = path.read_text(encoding='utf-8')
         frontmatter, body = parse_frontmatter(raw)
-        title = frontmatter.get('title') or infer_title(body, path.parent.name if path.name == 'README.md' else path.stem)
-        slug = path.parent.name if path.name == 'README.md' else path.stem
+        default_name = path.parent.name if path.name in {'README.md', 'INDEX.md'} else path.stem
+        title = frontmatter.get('title') or infer_title(body, default_name)
+        slug = default_name
         section_path = path.parent.relative_to(source_dir).as_posix()
         plain_text = strip_markdown(body)
         content_hash = hashlib.sha256(raw.encode('utf-8')).hexdigest()
