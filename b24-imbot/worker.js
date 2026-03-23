@@ -96,9 +96,10 @@ async function b24(env, method, params = {}) {
 // Отправить сообщение от бота в чат
 async function botReply(env, chatId, text) {
   await b24(env, "imbot.message.add", {
-    BOT_ID:  env.BOT_ID,
+    BOT_ID:    env.BOT_ID,
+    CLIENT_ID: "everest_ai_bot",
     DIALOG_ID: chatId,
-    MESSAGE: text,
+    MESSAGE:   text,
   });
 }
 
@@ -263,7 +264,7 @@ async function registerBot(env) {
     TYPE:        "B",  // Bot
     EVENT_HANDLER: `${workerUrl}/imbot`,
     OPENLINE:    "N",
-    CLIENT_ID:   "",
+    CLIENT_ID:   "everest_ai_bot",
     PROPERTIES: {
       NAME:       "ИИ-помощник Эверест",
       COLOR:      "AQUA",
