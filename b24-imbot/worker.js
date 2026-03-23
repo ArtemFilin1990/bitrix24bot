@@ -266,10 +266,8 @@ async function registerBot(env) {
     OPENLINE:    "N",
     CLIENT_ID:   "everest_ai_bot",
     PROPERTIES: {
-      NAME:       "ИИ-помощник Эверест",
-      COLOR:      "AQUA",
-      EMAIL:      "",
-      PERSONAL_BIRTHDAY: "",
+      NAME:         "ИИ-помощник Эверест",
+      COLOR:        "AQUA",
       WORK_POSITION: "AI Assistant",
       PERSONAL_WWW:  "https://ewerest.ru",
     },
