@@ -9,3 +9,8 @@ CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
 [[kv_namespaces]]
 binding = "CHAT_HISTORY"
 id = "f7257a53733146b6926eb20321ab4896"
+
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "bearings-catalog"
+database_id = "0b5b8131-d96b-4478-a63e-edc7c787b654"

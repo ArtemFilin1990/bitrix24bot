@@ -77,6 +77,18 @@ const TOOLS = [
       },
       required: ["user_id"]
     }
+  },
+  {
+    name: "search_catalog",
+    description: "Найти подшипник в каталоге по артикулу, ГОСТ, ISO или размерам. Использовать при любых вопросах об артикулах, аналогах, размерах подшипников.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Артикул, ГОСТ или ISO номер (например: 6205, 36205, 7207)" },
+        type:  { type: "string", description: "Тип подшипника (шариковый, роликовый, конический, сферический)" }
+      },
+      required: ["query"]
+    }
   }
 ];
 
@@ -159,6 +171,23 @@ async function executeTool(env, name, args) {
         return JSON.stringify((deals || []).slice(0, args.limit || 10).map(d => ({
           id: d.ID, title: d.TITLE, stage: d.STAGE_ID,
           amount: d.OPPORTUNITY, modified: d.DATE_MODIFY,
+        })));
+      }
+      case "search_catalog": {
+        const q = `%${args.query}%`;
+        const typeFilter = args.type ? `AND lower(type) LIKE lower('%${args.type.replace(/'/g,'')}%')` : "";
+        const { results } = await env.CATALOG.prepare(
+          `SELECT gost, iso, type, series, bore, outer, width, brands, analogues, notes
+           FROM bearings
+           WHERE (gost LIKE ? OR iso LIKE ? OR analogues LIKE ?) ${typeFilter}
+           LIMIT 5`
+        ).bind(q, q, q).all();
+        if (!results.length) return JSON.stringify({ found: 0, message: "Подшипник не найден в базе" });
+        return JSON.stringify(results.map(r => ({
+          гост: r.gost, iso: r.iso, тип: r.type,
+          размеры: `${r.bore}×${r.outer}×${r.width} мм`,
+          бренды: r.brands, аналоги: r.analogues,
+          примечания: r.notes,
         })));
       }
       default:
