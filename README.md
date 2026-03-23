@@ -1,344 +1,142 @@
 # b24-imbot — ИИ-бот для Bitrix24
 
-Cloudflare Worker. ИИ-помощник менеджера по подшипникам: поиск в каталоге, аналоги, CRM-сделки.
+Cloudflare Worker для менеджеров по подшипникам: поиск по каталогу, аналогам, брендам, CRM и базе знаний.
 
-**Стек:** Cloudflare Workers + KV + D1 · Gemini 2.5 Flash (function calling) · Bitrix24 imbot
+## Что изменено в ingestion
 
----
+В репозитории теперь два воспроизводимых SQL seed pipeline:
 
-## Структура
+- `scripts/build_bearings_seed.py` — строит повторяемый импорт справочника из `BearingsInfo/main`.
+- `scripts/build_kb_seed.py` — строит нормализованный ingestion базы знаний из `knowledge-base/main`.
 
+Оба скрипта:
+
+- работают от локальной копии source repo;
+- не требуют ручного копипаста в исходники;
+- поддерживают повторный запуск без дублей;
+- сохраняют совместимость с текущим runtime бота.
+
+## Структура репозитория
+
+```text
+.
+├── b24-imbot/
+│   ├── worker.js
+│   └── wrangler.toml
+├── scripts/
+│   ├── build_bearings_seed.py
+│   └── build_kb_seed.py
+├── tests/
+│   ├── fixtures/
+│   ├── test_build_bearings_seed.py
+│   └── test_build_kb_seed.py
+├── schema.sql
+└── wrangler.toml
 ```
-b24-imbot/
-├── worker.js     — основной Worker (бот + AI + B24 REST + импорт)
-└── wrangler.toml — конфиг деплоя (KV + D1 bindings)
-wrangler.toml     — корневой конфиг деплоя (используется GitHub Actions)
-.github/
-└── workflows/deploy.yml  — автодеплой при push в main
-```
 
----
+## Mapping источников
 
-## Шаг 1 — Создать ресурсы Cloudflare
+### BearingsInfo → bitrix24bot
 
-```bash
-# KV для истории диалогов
-wrangler kv:namespace create CHAT_HISTORY
-# → вставить id в оба wrangler.toml
+| Источник BearingsInfo | Mapping в bitrix24bot | Зачем |
+|---|---|---|
+| `data/csv/master_catalog.csv` | `bearings`, `catalog` | базовые позиции, размеры, ISO/ГОСТ, веса |
+| `data/analogs/gost_to_iso.csv` | `analogs` | канонические ГОСТ → ISO соответствия |
+| `data/analogs/iso_to_gost.csv` | `analogs` | обратный поиск ISO → ГОСТ |
+| `data/analogs/import_analogs.csv` | `analogs` | кросс-брендовые аналоги SKF/FAG/NSK/NTN/KOYO |
+| `data/brands.csv`, `data/brands/**/*.csv` | `brands` | справка по брендам и производителям |
 
-# D1 база данных
-wrangler d1 create bearings-catalog
-# → вставить database_id в оба wrangler.toml
-```
+### knowledge-base → bitrix24bot
 
-### Создать схему D1
+| Источник knowledge-base | Тип | Таблицы |
+|---|---|---|
+| `kb/ru/**/README.md`, `kb/ru/INDEX.md`, `kb/ru/**/INDEX.md` | `article` | `kb_documents`, `kb_chunks`, `kb_tags`, `kb_document_tags`, `kb_links` |
+| `prompts/**/*.md` | `prompt` | `kb_documents` + связанные таблицы |
+| `_templates/**/*.md` | `template` | `kb_documents` + связанные таблицы |
+| `_meta/**/*.md`, `_meta/**/*.json` | `meta` | `kb_documents` + связанные таблицы |
+| `inbox/**`, `scripts/**`, `tests/**`, `.github/**`, `.vscode/**` | пропуск | не импортируются в production knowledge |
+
+## Схема D1
+
+`schema.sql` создаёт:
+
+- runtime-таблицы `bearings`, `catalog`, `analogs`, `brands`;
+- аудит импортов `bearing_ingest_runs`, `kb_ingest_runs`;
+- нормализованный knowledge ingestion слой `kb_documents`, `kb_chunks`, `kb_tags`, `kb_document_tags`, `kb_links`, `kb_chunks_fts`;
+- legacy compatibility таблицу `knowledge` + `knowledge_fts` для старых точек входа.
+
+`search_knowledge` в `b24-imbot/worker.js` сначала ищет по `kb_chunks_fts`, затем делает LIKE fallback по `kb_*`, и только потом — по legacy `knowledge`, поэтому обратная совместимость сохранена.
+
+## Как обновлять данные из source repos
+
+### 1. Подготовить схему
 
 ```bash
 wrangler d1 execute bearings-catalog --file=schema.sql
 ```
 
-Файл `schema.sql` создаёт структуру D1, включая новый нормализованный ingestion-слой `kb_*` поверх legacy-таблицы `knowledge`. Базовый snapshot каталога и брендов остаётся в `schema.sql`, а knowledge seed теперь нужно собирать отдельно генератором, чтобы сохранить структуру репозитория `ArtemFilin1990/knowledge-base`.
-
-Если база знаний в `knowledge-base` обновилась, сначала перегенерируйте SQL-сид через `scripts/build_kb_seed.py`, затем повторно выполните `wrangler d1 execute bearings-catalog --file=schema.sql` и `wrangler d1 execute bearings-catalog --file=data/kb_seed.sql`, чтобы обновить `kb_documents`, `kb_chunks`, compatibility-таблицу `knowledge` и FTS-индексы.
-
-Или через Cloudflare Dashboard → D1 → Console (выполнить SQL из раздела «Схема» ниже).
-
----
-
-## Шаг 2 — Secrets
+### 2. Обновить BearingsInfo seed
 
 ```bash
-wrangler secret put GEMINI_API_KEY    # aistudio.google.com (бесплатно)
-wrangler secret put GEMINI_MODEL      # необязательно; по умолчанию: gemini-2.5-flash
-wrangler secret put B24_PORTAL        # your-portal.bitrix24.ru
-wrangler secret put B24_USER_ID       # ID пользователя REST
-wrangler secret put B24_TOKEN         # токен входящего webhook
-wrangler secret put WORKER_HOST       # bitrix24bot.YOUR.workers.dev
-wrangler secret put IMPORT_SECRET     # любая строка-пароль для эндпоинтов импорта
+git clone https://github.com/ArtemFilin1990/BearingsInfo ../BearingsInfo
+python scripts/build_bearings_seed.py \
+  --source-dir ../BearingsInfo \
+  --output data/bearings_seed.sql \
+  --source-snapshot "BearingsInfo@$(git -C ../BearingsInfo rev-parse --short HEAD)"
+wrangler d1 execute bearings-catalog --file=data/bearings_seed.sql
 ```
 
----
-
-## Шаг 3 — Деплой
+### 3. Обновить knowledge-base seed
 
 ```bash
-wrangler deploy        # из корня репозитория
-```
-
-или через GitHub Actions (push в `main` → автодеплой).
-
----
-
-## Шаг 4 — Зарегистрировать бота в B24
-
-```
-GET https://bitrix24bot.YOUR.workers.dev/register
-```
-
-Ответ вернёт `bot_id`. Сохранить в secrets или в `wrangler.toml → [vars]`:
-
-```bash
-wrangler secret put BOT_ID   # число из ответа /register
-wrangler deploy               # передеплой с BOT_ID
-```
-
----
-
-## Шаг 5 — Импорт данных (после первого деплоя)
-
-### Просмотр CSV перед импортом
-
-```
-GET /preview-file?file_id=<B24_FILE_ID>&secret=<IMPORT_SECRET>&lines=5
-```
-
-### Импорт подшипников из CSV (таблица `bearings`)
-
-```
-GET /import-catalog?file_id=<ID>&secret=<IMPORT_SECRET>
-```
-
-### Импорт расширенного каталога из CSV → `catalog`
-
-```
-# Сначала dry_run: показывает обнаруженные колонки
-GET /import-catalog-csv?file_id=<ID>&secret=<IMPORT_SECRET>&dry_run=1
-
-# Полный импорт
-GET /import-catalog-csv?file_id=<ID>&secret=<IMPORT_SECRET>
-
-# Ручная привязка колонок (индексы с 0)
-GET /import-catalog-csv?file_id=<ID>&secret=<IMPORT_SECRET>&c_desig=3&c_d=8&c_D=9
-```
-
-### Импорт каталога из Bitrix24 CRM
-
-**Шаг 0 — найти ID каталога:**
-```
-GET /discover-catalog?secret=<IMPORT_SECRET>
-```
-Вернёт `crm_catalogs` (для `crm.product.list`) и `trade_catalogs` (для `catalog.product.list`).
-
-**CRM-каталог** (`crm.product.list`, всегда доступен, нет qty/stock):
-```
-GET /import-catalog-crm?secret=<IMPORT_SECRET>&dry_run=1
-GET /import-catalog-crm?secret=<IMPORT_SECRET>
-GET /import-catalog-crm?secret=<IMPORT_SECRET>&section_id=42&limit=500
-```
-
-**Торговый каталог** (`catalog.product.list`, нужен scope `catalog` и `iblock_id`):
-```
-GET /import-catalog-crm?secret=<IMPORT_SECRET>&iblock_id=23&dry_run=1
-GET /import-catalog-crm?secret=<IMPORT_SECRET>&iblock_id=23
-```
-
-### Импорт аналогов CSV → таблица `analogs`
-
-```
-# dry_run: авто-детект колонок
-GET /import-analogs?file_id=<ID>&secret=<IMPORT_SECRET>&dry_run=1
-
-# Полный импорт
-GET /import-analogs?file_id=<ID>&secret=<IMPORT_SECRET>
-```
-
-### Импорт документов в базу знаний
-
-```
-# Одиночный MD-файл из Bitrix24 Disk
-GET /import-doc?file_id=<ID>&secret=<IMPORT_SECRET>&tags=подшипники,ГОСТ
-
-# Bulk-импорт JSON
-POST /import-doc-bulk
-Content-Type: application/json
-{"secret":"...","docs":[{"title":"...","content":"...","tags":"..."}]}
-
-# Bulk-импорт брендов
-POST /import-brands-bulk
-{"secret":"...","brands":[{"name":"SKF","description":"...","logo_url":"..."}]}
-```
-
----
-
-
-## Обновление базы знаний из `knowledge-base`
-
-```bash
-# 1. Получить или обновить локальную копию knowledge-base
-#    (путь можно выбрать любой; ниже пример с соседней папкой)
 git clone https://github.com/ArtemFilin1990/knowledge-base ../knowledge-base
-
-# 2. Сгенерировать нормализованный сид
-python scripts/build_kb_seed.py   --source-dir ../knowledge-base   --output data/kb_seed.sql   --source-snapshot "knowledge-base@$(git -C ../knowledge-base rev-parse --short HEAD)"
-
-# 3. Применить схему и сид в D1
-wrangler d1 execute bearings-catalog --file=schema.sql
+python scripts/build_kb_seed.py \
+  --source-dir ../knowledge-base \
+  --output data/kb_seed.sql \
+  --source-snapshot "knowledge-base@$(git -C ../knowledge-base rev-parse --short HEAD)"
 wrangler d1 execute bearings-catalog --file=data/kb_seed.sql
 ```
 
-### Что именно импортируется
+## Правила ingestion
 
-* `kb/ru/**/README.md` → `kb_documents.source_type='article'`, `is_canonical=1`.
-* `prompts/**/*.md` → `source_type='prompt'`.
-* `_templates/**/*.md` → `source_type='template'`.
-* `_meta/**/*.md` → `source_type='meta'`.
-* `inbox/**`, `.github/**`, `.vscode/**`, `scripts/**`, `tests/**` и не-markdown файлы по умолчанию не попадают в production seed.
+### Bearings pipeline
 
-### Новые таблицы ingestion-слоя
+1. scan source CSV;
+2. normalize master catalog → `bearings` и `catalog`;
+3. map analog CSV → `analogs`;
+4. merge brand CSV → `brands`;
+5. write idempotent SQL seed;
+6. log `bearing_ingest_runs`.
 
-* `kb_documents` — документ целиком: путь, тип, язык, slug, markdown/plain text, hash, frontmatter.
-* `kb_chunks` — детерминированные чанки по H1/H2/H3 или стабильным блокам.
-* `kb_tags`, `kb_document_tags` — нормализованные теги.
-* `kb_links` — внутренние ссылки между документами.
-* `kb_ingest_runs` — аудит импортов.
-* `kb_chunks_fts` — FTS5 индекс по чанкам.
+### Knowledge pipeline
 
-Legacy-таблица `knowledge` сохранена как compatibility-layer для текущего бота и наполняется каноническими `article`-документами.
+1. scan markdown/json source files;
+2. classify content type;
+3. normalize frontmatter and metadata;
+4. chunk content for FTS;
+5. upsert documents/tags/links/chunks;
+6. refresh compatibility table `knowledge`;
+7. log `kb_ingest_runs`.
 
-### Проверка импорта
+## Проверка локально
 
 ```bash
+python -m unittest tests/test_build_bearings_seed.py
 python -m unittest tests/test_build_kb_seed.py
-sqlite3 /tmp/kb.db < schema.sql
-sqlite3 /tmp/kb.db < data/kb_seed.sql
-sqlite3 /tmp/kb.db "SELECT source_type, COUNT(*) FROM kb_documents GROUP BY source_type;"
-sqlite3 /tmp/kb.db "SELECT title, heading_path FROM kb_chunks_fts WHERE kb_chunks_fts MATCH 'монтаж' LIMIT 5;"
 ```
 
-## Команды бота
+Дополнительно можно проверить готовый seed вручную:
 
-| Команда / фраза | Действие |
-|---|---|
-| `/start` · `помощь` | Приветствие и список возможностей |
-| `/сброс` | Очистить историю диалога |
-| `мои сделки` | Активные сделки менеджера |
-| `найди сделку <название>` | Поиск по CRM |
-| `данные сделки <ID>` | Полная карточка сделки |
-| `6205 цена` | Поиск подшипника в каталоге (цена, остаток) |
-| `аналог 6205` | Найти аналоги ГОСТ/ISO |
-| `что такое SKF` | Информация о производителе |
-
----
-
-## Инструменты ИИ (function calling)
-
-| Инструмент | Назначение |
-|---|---|
-| `get_deal` | Данные сделки по ID |
-| `search_deals` | Поиск сделок (по названию, стадии) |
-| `get_company` | Данные компании из CRM |
-| `get_deal_products` | Товары в сделке |
-| `get_my_deals` | Активные сделки менеджера |
-| `search_catalog` | Поиск в каталоге → `catalog` → fallback на `bearings` |
-| `search_analogs` | Аналоги подшипников (ГОСТ ↔ ISO, таблица `analogs`) |
-| `search_brand` | Информация о бренде/производителе |
-| `search_knowledge` | Полнотекстовый поиск (FTS5) по базе знаний |
-
----
-
-## Схема D1 (`bearings-catalog`)
-
-```sql
--- Базовый каталог (только name/article/brand/weight)
-CREATE TABLE IF NOT EXISTS bearings (
-  id      INTEGER PRIMARY KEY AUTOINCREMENT,
-  name    TEXT NOT NULL,
-  article TEXT NOT NULL,
-  brand   TEXT,
-  weight  REAL
-);
-CREATE INDEX IF NOT EXISTS idx_article ON bearings(article);
-CREATE INDEX IF NOT EXISTS idx_name    ON bearings(name);
-
--- Расширенный каталог (с ценой, остатком, размерами, ГОСТ/ISO)
-CREATE TABLE IF NOT EXISTS catalog (
-  item_id          TEXT PRIMARY KEY,
-  manufacturer     TEXT,
-  category_ru      TEXT,
-  subcategory_ru   TEXT,
-  series_ru        TEXT,
-  name_ru          TEXT,
-  designation      TEXT,
-  iso_ref          TEXT,
-  section          TEXT,
-  d_mm             REAL,
-  big_d_mm         REAL,
-  b_mm             REAL,
-  t_mm             REAL,
-  mass_kg          REAL,
-  analog_ref       TEXT,
-  price_rub        REAL,
-  qty              INTEGER,
-  stock_flag       INTEGER DEFAULT 0,
-  bitrix_section_1 TEXT,
-  bitrix_section_2 TEXT,
-  bitrix_section_3 TEXT,
-  gost_ref         TEXT,
-  brand_display    TEXT,
-  suffix_desc      TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_catalog_designation  ON catalog(designation);
-CREATE INDEX IF NOT EXISTS idx_catalog_manufacturer ON catalog(manufacturer);
-CREATE INDEX IF NOT EXISTS idx_catalog_category     ON catalog(category_ru);
-CREATE INDEX IF NOT EXISTS idx_catalog_stock        ON catalog(stock_flag);
-
--- Аналоги (ГОСТ ↔ ISO, отечественные ↔ импортные)
-CREATE TABLE IF NOT EXISTS analogs (
-  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-  brand              TEXT,
-  designation        TEXT,
-  analog_designation TEXT,
-  analog_brand       TEXT,
-  factory            TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_analogs_designation ON analogs(designation);
-CREATE INDEX IF NOT EXISTS idx_analogs_analog      ON analogs(analog_designation);
-
--- Бренды / производители
-CREATE TABLE IF NOT EXISTS brands (
-  name        TEXT PRIMARY KEY,
-  description TEXT,
-  logo_url    TEXT,
-  search_url  TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_brands_name ON brands(name);
-
--- База знаний (MD-документы)
-CREATE TABLE IF NOT EXISTS knowledge (
-  id      INTEGER PRIMARY KEY AUTOINCREMENT,
-  title   TEXT NOT NULL UNIQUE,
-  content TEXT NOT NULL,
-  tags    TEXT DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_knowledge_title ON knowledge(title);
-
--- FTS5 для полнотекстового поиска по базе знаний
-CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
-  USING fts5(title, content, tags, content=knowledge, content_rowid=id);
-
-CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
-  INSERT INTO knowledge_fts(rowid, title, content, tags) VALUES (new.id, new.title, new.content, new.tags);
-END;
-CREATE TRIGGER IF NOT EXISTS knowledge_ad AFTER DELETE ON knowledge BEGIN
-  INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content, tags)
-  VALUES('delete', old.id, old.title, old.content, old.tags);
-END;
-CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge BEGIN
-  INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content, tags)
-  VALUES('delete', old.id, old.title, old.content, old.tags);
-  INSERT INTO knowledge_fts(rowid, title, content, tags) VALUES (new.id, new.title, new.content, new.tags);
-END;
+```bash
+sqlite3 /tmp/b24bot.db < schema.sql
+sqlite3 /tmp/b24bot.db < data/bearings_seed.sql
+sqlite3 /tmp/b24bot.db < data/kb_seed.sql
+sqlite3 /tmp/b24bot.db "SELECT COUNT(*) FROM catalog WHERE bitrix_section_1 = 'BearingsInfo';"
+sqlite3 /tmp/b24bot.db "SELECT title, heading_path FROM kb_chunks_fts WHERE kb_chunks_fts MATCH 'монтаж' LIMIT 5;"
 ```
 
----
+## ASSUMPTIONS
 
-## Риски и решения
-
-| Ситуация | Решение |
-|---|---|
-| `imbot.register` уже зарегистрирован | Вызвать `imbot.unregister` → повторить `/register` |
-| BOT_ID не задан → ошибка отправки | `wrangler secret put BOT_ID` после `/register` |
-| KV id не вставлен → история не сохраняется | Вставить id в оба `wrangler.toml` |
-| `catalog` пуст → нет цен и остатков | Запустить `/import-catalog-crm` или `/import-catalog-csv` |
-| Gemini 429 (rate limit) | Бесплатный тариф: 15 req/min. Добавить задержку или перейти на платный |
-| FTS5 не возвращает результаты | При добавлении записей вне импорт-эндпоинтов — вручную: `INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')` |
+- Для импорта BearingsInfo в существующую модель `catalog` используется явный mapping layer: одна строка `master_catalog.csv` раскрывается в несколько строк `catalog` по брендовым колонкам `SKF/FAG/NSK/NTN/KOYO`.
+- В `kb_documents.source_type='article'` импортируются только production-материалы из `kb/ru/**`; `inbox/**` не попадает в production seed.
+- `_meta/**/*.json` допустимо хранить как `meta`, потому что это отдельный тип контента и он не смешивается со статьями.
