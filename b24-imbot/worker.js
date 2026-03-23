@@ -77,6 +77,39 @@ const TOOLS = [
       },
       required: ["user_id"]
     }
+  },
+  {
+    name: "search_catalog",
+    description: "Найти подшипник в каталоге по артикулу или наименованию. Использовать при вопросах об артикулах, наличии, брендах, весе подшипников.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Артикул или наименование подшипника (например: 6205, 6205-2RS, NU 220)" }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "search_knowledge",
+    description: "Найти информацию в базе знаний: технические каталоги, статьи о производстве, ГОСТ/ISO таблицы, аналоги. Использовать при вопросах о размерах, типах подшипников, стандартах.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Поисковый запрос (например: ГОСТ 7242 таблица, конический подшипник размеры)" }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "search_brand",
+    description: "Получить информацию о производителе подшипников: история, специализация, страна. Использовать при вопросах о конкретном бренде/заводе.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Название бренда/производителя (например: SKF, FAG, ZKL, ГПЗ)" }
+      },
+      required: ["name"]
+    }
   }
 ];
 
@@ -161,6 +194,42 @@ async function executeTool(env, name, args) {
           amount: d.OPPORTUNITY, modified: d.DATE_MODIFY,
         })));
       }
+      case "search_catalog": {
+        const q = `%${args.query}%`;
+        const { results } = await env.CATALOG.prepare(
+          `SELECT name, article, brand, weight
+           FROM bearings
+           WHERE name LIKE ? OR article LIKE ?
+           LIMIT 10`
+        ).bind(q, q).all();
+        if (!results.length) return JSON.stringify({ found: 0, message: "Подшипник не найден в базе" });
+        return JSON.stringify(results.map(r => ({
+          наименование: r.name,
+          артикул: r.article,
+          завод: r.brand,
+          вес_кг: r.weight,
+        })));
+      }
+      case "search_knowledge": {
+        const q = `%${args.query}%`;
+        const { results } = await env.CATALOG.prepare(
+          `SELECT title, substr(content,1,4000) as content, tags FROM knowledge
+           WHERE title LIKE ? OR content LIKE ? OR tags LIKE ?
+           LIMIT 3`
+        ).bind(q, q, q).all();
+        if (!results.length) return JSON.stringify({ found: 0, message: "Информация не найдена в базе знаний" });
+        return JSON.stringify(results.map(r => ({ заголовок: r.title, содержание: r.content, теги: r.tags })));
+      }
+      case "search_brand": {
+        const q = `%${args.name}%`;
+        const { results } = await env.CATALOG.prepare(
+          `SELECT name, substr(description,1,2000) as description FROM brands
+           WHERE name LIKE ? OR description LIKE ?
+           LIMIT 3`
+        ).bind(q, q).all();
+        if (!results.length) return JSON.stringify({ found: 0, message: "Производитель не найден" });
+        return JSON.stringify(results.map(r => ({ бренд: r.name, описание: r.description })));
+      }
       default:
         return JSON.stringify({ error: "Unknown tool: " + name });
     }
@@ -179,7 +248,7 @@ const GEMINI_TOOLS = [{
 }];
 
 async function askGemini(env, history, userText) {
-  const MODEL = "gemini-2.0-flash";
+  const MODEL = env.GEMINI_MODEL || "gemini-2.5-flash";
   const URL   = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
 
   const contents = [
@@ -292,6 +361,122 @@ export default {
       try {
         const result = await registerBot(env);
         return json({ ok: true, bot_id: result, note: "Сохрани BOT_ID в secrets: wrangler secret put BOT_ID" });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // Импорт каталога из Bitrix24 Disk (разовая операция)
+    // GET /import-catalog?file_id=58925&secret=<IMPORT_SECRET>
+    if (url.pathname === "/import-catalog" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const fileId   = url.searchParams.get("file_id");
+      const directUrl = url.searchParams.get("url");
+      if (!fileId && !directUrl) return json({ error: "file_id or url required" }, 400);
+      try {
+        // Получаем download URL: напрямую или через Bitrix24 API
+        const downloadUrl = directUrl || (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
+        const csvResp = await fetch(downloadUrl);
+        const csvText = await csvResp.text();
+
+        // Парсим CSV (разделитель ;, UTF-8 BOM)
+        const lines = csvText.replace(/^\uFEFF/, "").split("\n").filter(l => l.trim());
+        const header = lines[0].split(";").map(h => h.trim());
+        const iName = header.indexOf("Наименование");
+        const iArt  = header.indexOf("Артикул");
+        const iBrand = header.indexOf("Завод");
+        const iWeight = header.findIndex(h => h.startsWith("Вес"));
+
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(";");
+          const name    = (cols[iName]   || "").trim().replace(/'/g, "''");
+          const article = (cols[iArt]    || "").trim().replace(/'/g, "''");
+          const brand   = (cols[iBrand]  || "").trim().replace(/'/g, "''");
+          const wRaw    = (cols[iWeight] || "").trim().replace(",", ".");
+          const weight  = parseFloat(wRaw) || null;
+          if (name && article) rows.push({ name, article, brand, weight });
+        }
+
+        // Очищаем и вставляем батчами по 100
+        await env.CATALOG.prepare("DELETE FROM bearings").run();
+        let inserted = 0;
+        const BATCH = 20;
+        for (let i = 0; i < rows.length; i += BATCH) {
+          const batch = rows.slice(i, i + BATCH);
+          const placeholders = batch.map(() => "(?,?,?,?)").join(",");
+          const values = batch.flatMap(r => [r.name, r.article, r.brand, r.weight]);
+          await env.CATALOG.prepare(
+            `INSERT INTO bearings (name,article,brand,weight) VALUES ${placeholders}`
+          ).bind(...values).run();
+          inserted += batch.length;
+        }
+        return json({ ok: true, inserted, total: rows.length });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // Bulk-импорт документов: POST /import-doc-bulk {secret, docs:[{title,content,tags}]}
+    if (url.pathname === "/import-doc-bulk" && request.method === "POST") {
+      const body = await request.json();
+      if (body.secret !== env.IMPORT_SECRET) return json({ error: "Forbidden" }, 403);
+      const docs = body.docs || [];
+      let inserted = 0;
+      for (const doc of docs) {
+        const { title, content, tags = "" } = doc;
+        if (!title || !content) continue;
+        await env.CATALOG.prepare("DELETE FROM knowledge WHERE title = ?").bind(title).run();
+        await env.CATALOG.prepare(
+          "INSERT INTO knowledge (title, content, tags) VALUES (?,?,?)"
+        ).bind(title, content, tags).run();
+        inserted++;
+      }
+      return json({ ok: true, inserted });
+    }
+
+    // Bulk-импорт брендов: POST /import-brands-bulk {secret, brands:[{name,description,logo_url,search_url}]}
+    if (url.pathname === "/import-brands-bulk" && request.method === "POST") {
+      const body = await request.json();
+      if (body.secret !== env.IMPORT_SECRET) return json({ error: "Forbidden" }, 403);
+      let inserted = 0;
+      for (const b of (body.brands || [])) {
+        const { name, description = "", logo_url = "", search_url = "" } = b;
+        if (!name) continue;
+        await env.CATALOG.prepare(
+          `INSERT INTO brands (name,description,logo_url,search_url) VALUES (?,?,?,?)
+           ON CONFLICT(name) DO UPDATE SET description=excluded.description,
+           logo_url=excluded.logo_url, search_url=excluded.search_url`
+        ).bind(name, description, logo_url, search_url).run();
+        inserted++;
+      }
+      return json({ ok: true, inserted });
+    }
+
+    // Импорт MD-документа в базу знаний из Bitrix24 Disk
+    // GET /import-doc?file_id=<id>&secret=<IMPORT_SECRET>&tags=tag1,tag2
+    if (url.pathname === "/import-doc" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const fileId    = url.searchParams.get("file_id");
+      const directUrl = url.searchParams.get("url");
+      const tags      = url.searchParams.get("tags") || "";
+      if (!fileId && !directUrl) return json({ error: "file_id or url required" }, 400);
+      try {
+        const meta        = fileId ? await b24(env, "disk.file.get", { id: fileId }) : null;
+        const downloadUrl = directUrl || meta.DOWNLOAD_URL;
+        const title       = url.searchParams.get("title") ||
+                            (meta ? meta.NAME.replace(/_/g, " ").replace(/\.md$/i, "") : "Документ");
+        const content     = await (await fetch(downloadUrl)).text();
+        // Удаляем старую версию с таким же заголовком (upsert)
+        await env.CATALOG.prepare("DELETE FROM knowledge WHERE title = ?").bind(title).run();
+        await env.CATALOG.prepare(
+          "INSERT INTO knowledge (title, content, tags) VALUES (?,?,?)"
+        ).bind(title, content, tags).run();
+        return json({ ok: true, title, bytes: content.length });
       } catch (e) {
         return json({ error: e.message }, 500);
       }
