@@ -574,7 +574,9 @@ export default {
         const text = await (await fetch(downloadUrl)).text();
         const lines = text.replace(/^\uFEFF/, "").split("\n").filter(l => l.trim());
         const header = lines[0].split(sep).map(h => h.trim());
-        const hi = h => header.findIndex(c => c.toLowerCase().includes(h));
+        const hi   = h => header.findIndex(c => c.toLowerCase().includes(h));
+        // Case-sensitive поиск нужен для d/D (внутр/наружный диаметр)
+        const hiCS = h => header.findIndex(c => c.includes(h));
 
         const cols = {
           item_id:         url.searchParams.get("c_item_id")    ?? String(hi("id") >= 0 ? hi("id") : 0),
@@ -587,9 +589,9 @@ export default {
           iso_ref:         url.searchParams.get("c_iso")        ?? String(hi("iso")),
           gost_ref:        url.searchParams.get("c_gost")       ?? String(hi("гост")),
           section:         url.searchParams.get("c_section")    ?? String(hi("секция") >= 0 ? hi("секция") : hi("тип")),
-          d_mm:            url.searchParams.get("c_d")          ?? String(hi(" d ") >= 0 ? hi(" d ") : hi("внутр")),
-          big_d_mm:        url.searchParams.get("c_D")          ?? String(hi(" d ") >= 0 ? hi(" d,") : hi("наруж")),
-          b_mm:            url.searchParams.get("c_b")          ?? String(hi(" b ") >= 0 ? hi(" b ") : hi("шири")),
+          d_mm:            url.searchParams.get("c_d")          ?? String(hiCS(" d ") >= 0 ? hiCS(" d ") : hi("внутр")),
+          big_d_mm:        url.searchParams.get("c_D")          ?? String(hiCS(" D ") >= 0 ? hiCS(" D ") : hi("наруж")),
+          b_mm:            url.searchParams.get("c_b")          ?? String(hiCS(" b ") >= 0 ? hiCS(" b ") : hi("шири")),
           t_mm:            url.searchParams.get("c_t")          ?? String(hi(" t ")),
           mass_kg:         url.searchParams.get("c_mass")       ?? String(hi("масс") >= 0 ? hi("масс") : hi("вес")),
           analog_ref:      url.searchParams.get("c_analog")     ?? String(hi("аналог")),
