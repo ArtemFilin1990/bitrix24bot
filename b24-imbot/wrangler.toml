@@ -2,10 +2,20 @@ name = "b24-imbot"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
-# KV для хранения истории диалогов (создать: wrangler kv:namespace create CHAT_HISTORY)
+[vars]
+BOT_ID    = "1267"
+CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
+
+# KV для хранения истории диалогов
 [[kv_namespaces]]
 binding = "CHAT_HISTORY"
 id = "f7257a53733146b6926eb20321ab4896"
+
+# D1 — каталог подшипников, база знаний, бренды, аналоги
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "bearings-catalog"
+database_id = "0b5b8131-d96b-4478-a63e-edc7c787b654"
 
 # Кастомный домен (опционально)
 # [[routes]]
