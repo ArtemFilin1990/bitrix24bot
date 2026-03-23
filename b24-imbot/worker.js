@@ -96,9 +96,10 @@ async function b24(env, method, params = {}) {
 // Отправить сообщение от бота в чат
 async function botReply(env, chatId, text) {
   await b24(env, "imbot.message.add", {
-    BOT_ID:  env.BOT_ID,
+    BOT_ID:    env.BOT_ID,
+    CLIENT_ID: env.CLIENT_ID,
     DIALOG_ID: chatId,
-    MESSAGE: text,
+    MESSAGE:   text,
   });
 }
 
@@ -263,12 +264,10 @@ async function registerBot(env) {
     TYPE:        "B",  // Bot
     EVENT_HANDLER: `${workerUrl}/imbot`,
     OPENLINE:    "N",
-    CLIENT_ID:   "",
+    CLIENT_ID:   "everest_ai_bot",
     PROPERTIES: {
-      NAME:       "ИИ-помощник Эверест",
-      COLOR:      "AQUA",
-      EMAIL:      "",
-      PERSONAL_BIRTHDAY: "",
+      NAME:         "ИИ-помощник Эверест",
+      COLOR:        "AQUA",
       WORK_POSITION: "AI Assistant",
       PERSONAL_WWW:  "https://ewerest.ru",
     },
@@ -322,20 +321,38 @@ export default {
         return json({ ok: true });
       }
 
-      // Команды
+      // Определить контекст: групповой чат или личный диалог
+      // В Bitrix24 DIALOG_ID группового чата начинается с "chat"
+      const isGroupChat = chatId && String(chatId).startsWith("chat");
+
+      // ── Ключевые слова для мониторинга групповых чатов ──────
+      // В групповом чате бот молчит, пока не встретит одно из слов
+      const KEYWORDS = [
+        "подшипник", "подшипники", "артикул",
+        "сделка", "сделки", "клиент",
+        "цена", "стоимость", "скидка",
+        "кп", "коммерческ",
+        "заказ", "поставка", "наличие", "срок",
+      ];
+
+      if (isGroupChat) {
+        const lower = message.toLowerCase();
+        const hit = KEYWORDS.find(kw => lower.includes(kw));
+        if (!hit) return json({ ok: true }); // не реагировать — ключевых слов нет
+      }
+
+      // Команды (работают и в личном чате, и в групповом)
       if (message === "/start" || message === "/помощь" || message === "помощь") {
         await botReply(env, chatId,
-          `[B]ИИ-помощник Эверест[/B] 🤖\n\n` +
+          `[B]ИИ-помощник Эверест[/B]\n\n` +
           `Что умею:\n` +
           `• Искать и анализировать сделки\n` +
           `• Показывать данные клиентов\n` +
           `• Отвечать по каталогу подшипников\n` +
           `• Помогать с текстами (КП, письма)\n\n` +
-          `Примеры:\n` +
-          `— Мои активные сделки\n` +
-          `— Найди сделку по ООО Ромашка\n` +
-          `— Данные сделки 123\n` +
-          `— Аналог подшипника 6205-2RS\n\n` +
+          (isGroupChat
+            ? `[I]В групповом чате реагирую на слова: подшипник, сделка, КП, цена, скидка, заказ, поставка, наличие, артикул...[/I]\n\n`
+            : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`) +
           `/сброс — очистить историю диалога`
         );
         return json({ ok: true });
@@ -355,9 +372,9 @@ export default {
       try {
         const history = await getHistory(env, userId);
 
-        // Добавить контекст пользователя в первый запрос
+        // Добавить контекст в первый запрос сессии
         const contextMsg = history.length === 0
-          ? `[Контекст: пользователь B24 ID=${userId}]\n\n${message}`
+          ? `[Контекст: пользователь B24 ID=${userId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
           : message;
 
         const { text, history: newHistory } = await askGemini(env, history, contextMsg);
