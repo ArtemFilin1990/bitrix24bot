@@ -37,6 +37,8 @@ wrangler d1 create bearings-catalog
 wrangler d1 execute bearings-catalog --file=schema.sql
 ```
 
+Файл `schema.sql` теперь не только создаёт структуру, но и загружает стартовые справочные данные для таблиц `bearings`, `catalog`, `analogs` и `brands` из проекта BearingsInfo.
+
 Или через Cloudflare Dashboard → D1 → Console (выполнить SQL из раздела «Схема» ниже).
 
 ---
