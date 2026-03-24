@@ -118,8 +118,6 @@ def classify(rel_path: str) -> tuple[str, int, str] | None:
         return None
     if path.startswith('kb/ru/') and path.endswith(('/README.md', '/INDEX.md')):
         return 'article', 1, 'ru'
-    if path == 'kb/ru/INDEX.md':
-        return 'article', 1, 'ru'
     if path.startswith('prompts/') and path.endswith('.md'):
         return 'prompt', 0, 'ru'
     if path.startswith('_templates/') and path.endswith('.md'):

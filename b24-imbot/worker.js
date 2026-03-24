@@ -1172,12 +1172,15 @@ export default {
         "цена", "стоимость", "скидка",
         "кп", "коммерческ",
         "заказ", "поставка", "наличие", "срок",
+        "каталог", "аналог",
       ];
 
       if (isGroupChat) {
         const lower = message.toLowerCase();
         const hit = KEYWORDS.find(kw => lower.includes(kw));
-        if (!hit) return json({ ok: true }); // не реагировать — ключевых слов нет
+        // также реагируем если бот @-упомянут (Bitrix24 кодирует как [USER=<id>])
+        const botMentioned = env.BOT_ID && message.includes(`[USER=${env.BOT_ID}]`);
+        if (!hit && !botMentioned) return json({ ok: true }); // не реагировать
       }
 
       // Команды (работают и в личном чате, и в групповом)
