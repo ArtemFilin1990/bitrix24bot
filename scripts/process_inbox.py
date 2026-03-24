@@ -33,11 +33,21 @@ from build_kb_seed import (  # noqa: E402
     strip_markdown,
 )
 
-SOURCE_REPO = "ArtemFilin1990/bitrix24bot"
+_DEFAULT_SOURCE_REPO = "ArtemFilin1990/bitrix24bot"
 
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _detect_sep(text: str) -> str:
+    """Detect CSV delimiter using Sniffer; fall back to semicolon."""
+    sample = "\n".join(text.splitlines()[:5])
+    try:
+        dialect = csv_module.Sniffer().sniff(sample, delimiters=",;\t")
+        return dialect.delimiter
+    except csv_module.Error:
+        return ";"
 
 
 def _read_csv(text: str, sep: str = ";") -> tuple[list[str], list[list[str]]]:
@@ -78,7 +88,7 @@ def _getnum(row: list[str], idx: int) -> float | None:
 
 # ── Markdown → kb_documents ───────────────────────────────────────────────────
 
-def process_doc(path: Path, docs_root: Path) -> str:
+def process_doc(path: Path, docs_root: Path, source_repo: str) -> str:
     """Generate UPSERT SQL for a single Markdown file."""
     raw = path.read_text(encoding="utf-8")
     frontmatter, body = parse_frontmatter(raw)
@@ -119,7 +129,7 @@ def process_doc(path: Path, docs_root: Path) -> str:
             "INSERT INTO kb_documents "
             "(source_repo, source_path, source_type, lang, slug, title, section_path, "
             "frontmatter_json, raw_markdown, plain_text, content_hash, is_canonical) "
-            f"VALUES ({sql_quote(SOURCE_REPO)}, {sp}, {sql_quote(source_type)}, "
+            f"VALUES ({sql_quote(source_repo)}, {sp}, {sql_quote(source_type)}, "
             f"{sql_quote(lang)}, {sql_quote(slug)}, {sql_quote(title)}, "
             f"{sql_quote(section_path)}, {sql_quote(fm_json)}, {sql_quote(raw)}, "
             f"{sql_quote(plain_text)}, {sql_quote(content_hash)}, {is_canonical}) "
@@ -171,8 +181,7 @@ def process_doc(path: Path, docs_root: Path) -> str:
 
 def process_catalog(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
-    sep = ";" if ";" in text.split("\n")[0] else ","
-    header, rows = _read_csv(text, sep)
+    header, rows = _read_csv(text, _detect_sep(text))
     hl = [h.lower() for h in header]
 
     # For d / D / B: try Russian keywords first, then exact case-sensitive match.
@@ -209,7 +218,7 @@ def process_catalog(path: Path) -> str:
     for j, row in enumerate(rows):
         if not any(c.strip() for c in row):
             continue
-        item_id = _get(row, cols["item_id"]) or str(j + 1)
+        item_id = _get(row, cols["item_id"]) or f"{path.stem}:{j + 1}"
         qty_raw = _get(row, cols["qty"])
         stock_raw = _get(row, cols["stock_flag"]).lower()
         stock = 1 if stock_raw in ("1", "да", "yes", "true") else 0
@@ -253,7 +262,7 @@ def process_catalog(path: Path) -> str:
 
 def process_analogs(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
-    header, rows = _read_csv(text, ";")
+    header, rows = _read_csv(text, _detect_sep(text))
     hl = [h.lower() for h in header]
 
     iBrand  = _find(hl, "бренд", "марка", "brand")
@@ -283,7 +292,7 @@ def process_analogs(path: Path) -> str:
 
 def process_brands(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
-    header, rows = _read_csv(text, ";")
+    header, rows = _read_csv(text, _detect_sep(text))
     hl = [h.lower() for h in header]
 
     iName   = _find(hl, "name", "название", "бренд", "марка")
@@ -312,9 +321,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Process inbox/ files → SQL for D1")
     parser.add_argument("--inbox", default="inbox", help="Path to inbox directory")
     parser.add_argument("--output", required=True, help="Output .sql file path")
+    parser.add_argument(
+        "--source-repo",
+        default=_DEFAULT_SOURCE_REPO,
+        help="Source repo string written into kb_documents.source_repo",
+    )
     args = parser.parse_args()
 
     inbox = Path(args.inbox)
+    source_repo = args.source_repo
     stats = {"docs": 0, "catalog": 0, "analogs": 0, "brands": 0, "total_files": 0}
 
     sql_parts = [
@@ -323,33 +338,20 @@ def main() -> None:
         "BEGIN TRANSACTION;",
     ]
 
-    docs_root = inbox / "docs"
-    if docs_root.exists():
-        for md_file in sorted(docs_root.rglob("*.md")):
-            sql_parts.append(process_doc(md_file, docs_root))
-            stats["docs"] += 1
+    # Markdown docs → kb_documents + kb_chunks (FTS updated via schema triggers)
+    for md_file in sorted((inbox / "docs").rglob("*.md")):
+        sql_parts.append(process_doc(md_file, inbox / "docs", source_repo))
+        stats["docs"] += 1
 
-    # Rebuild FTS after doc changes
-    if stats["docs"]:
-        sql_parts += [
-            "-- Rebuild FTS index",
-            "INSERT INTO kb_chunks_fts(kb_chunks_fts) VALUES ('delete-all');",
-            "INSERT INTO kb_chunks_fts(rowid, title, heading_path, content, tags) "
-            "SELECT c.id, d.title, COALESCE(c.heading_path, ''), c.content, "
-            "COALESCE((SELECT group_concat(t.name, ' ') FROM kb_document_tags dt "
-            "JOIN kb_tags t ON t.id = dt.tag_id WHERE dt.document_id = d.id), '') "
-            "FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id;",
-        ]
-
-    for csv_file in sorted((inbox / "catalog").glob("*.csv")) if (inbox / "catalog").exists() else []:
+    for csv_file in sorted((inbox / "catalog").glob("*.csv")):
         sql_parts.append(process_catalog(csv_file))
         stats["catalog"] += 1
 
-    for csv_file in sorted((inbox / "analogs").glob("*.csv")) if (inbox / "analogs").exists() else []:
+    for csv_file in sorted((inbox / "analogs").glob("*.csv")):
         sql_parts.append(process_analogs(csv_file))
         stats["analogs"] += 1
 
-    for csv_file in sorted((inbox / "brands").glob("*.csv")) if (inbox / "brands").exists() else []:
+    for csv_file in sorted((inbox / "brands").glob("*.csv")):
         sql_parts.append(process_brands(csv_file))
         stats["brands"] += 1
 

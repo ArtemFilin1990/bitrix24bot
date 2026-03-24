@@ -11,12 +11,11 @@ SCHEMA = ROOT / "schema.sql"
 
 
 class ProcessInboxTests(unittest.TestCase):
-    def run_script(self, inbox: Path, output: Path) -> None:
-        subprocess.run(
-            ["python", str(SCRIPT), "--inbox", str(inbox), "--output", str(output)],
-            check=True,
-            cwd=ROOT,
-        )
+    def run_script(self, inbox: Path, output: Path, *, source_repo: str | None = None) -> None:
+        cmd = ["python", str(SCRIPT), "--inbox", str(inbox), "--output", str(output)]
+        if source_repo:
+            cmd += ["--source-repo", source_repo]
+        subprocess.run(cmd, check=True, cwd=ROOT)
 
     def prepare_db(self, seed_sql: Path) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
@@ -291,6 +290,59 @@ class ProcessInboxTests(unittest.TestCase):
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM catalog").fetchone()[0], 4)
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM analogs").fetchone()[0], 4)
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM brands").fetchone()[0], 3)
+
+    def test_source_repo_cli_arg(self):
+        """--source-repo value should appear in kb_documents.source_repo."""
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = Path(tmp) / "inbox.sql"
+            self.run_script(FIXTURE, seed, source_repo="my-fork/bitrix24bot")
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            repos = {
+                r[0] for r in cur.execute("SELECT DISTINCT source_repo FROM kb_documents").fetchall()
+            }
+            self.assertEqual(repos, {"my-fork/bitrix24bot"})
+
+    def test_comma_separated_analogs(self):
+        """Analogs CSV with comma separators should parse correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "analogs").mkdir(parents=True)
+            csv = inbox / "analogs" / "comma.csv"
+            csv.write_text(
+                "brand,designation,analog,manufacturer\n"
+                "ГОСТ,305,6305,ISO\n"
+                "ISO,6305,305,ГОСТ\n",
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            self.assertEqual(cur.execute("SELECT COUNT(*) FROM analogs").fetchone()[0], 2)
+
+    def test_catalog_missing_item_id_uses_deterministic_key(self):
+        """Rows without an id column get a deterministic 'stem:N' key."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "catalog").mkdir(parents=True)
+            csv = inbox / "catalog" / "noid.csv"
+            csv.write_text(
+                "Обозначение;Производитель;Внутр.диаметр;Наруж.диаметр;Ширина\n"
+                "6205;SKF;25;52;15\n"
+                "6305;FAG;25;62;17\n",
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            keys = {r[0] for r in cur.execute("SELECT item_id FROM catalog").fetchall()}
+            self.assertIn("noid:1", keys)
+            self.assertIn("noid:2", keys)
+            # Re-import must not grow count (idempotent via INSERT OR REPLACE)
+            conn.executescript(seed.read_text(encoding="utf-8"))
+            self.assertEqual(cur.execute("SELECT COUNT(*) FROM catalog").fetchone()[0], 2)
 
     def test_empty_inbox_produces_valid_sql(self):
         """An empty inbox directory should still generate valid (no-op) SQL."""
