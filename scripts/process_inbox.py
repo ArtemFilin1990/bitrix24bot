@@ -56,6 +56,14 @@ def _find(header_lower: list[str], *keywords: str) -> int:
     )
 
 
+def _find_exact(header: list[str], *names: str) -> int:
+    """Exact case-sensitive match — used to distinguish d / D / B columns."""
+    return next(
+        (i for i, h in enumerate(header) if h.strip() in names),
+        -1,
+    )
+
+
 def _get(row: list[str], idx: int) -> str:
     return (row[idx] if 0 <= idx < len(row) else "").strip()
 
@@ -167,6 +175,12 @@ def process_catalog(path: Path) -> str:
     header, rows = _read_csv(text, sep)
     hl = [h.lower() for h in header]
 
+    # For d / D / B: try Russian keywords first, then exact case-sensitive match.
+    # This handles both "Внутр.диаметр" style and bare "d", "D", "B" columns.
+    def _col_dim(ru_kw: str, exact: str) -> int:
+        idx = _find(hl, ru_kw)
+        return idx if idx >= 0 else _find_exact(header, exact)
+
     cols = {
         "item_id":        _find(hl, "id"),
         "manufacturer":   _find(hl, "произв", "завод"),
@@ -178,10 +192,10 @@ def process_catalog(path: Path) -> str:
         "iso_ref":        _find(hl, "iso"),
         "gost_ref":       _find(hl, "гост"),
         "section":        _find(hl, "секция", "тип"),
-        "d_mm":           _find(hl, " d ", "внутр"),
-        "big_d_mm":       _find(hl, " d_", "наруж"),
-        "b_mm":           _find(hl, " b ", "шири"),
-        "t_mm":           _find(hl, " t "),
+        "d_mm":           _col_dim("внутр", "d"),
+        "big_d_mm":       _col_dim("наруж", "D"),
+        "b_mm":           _col_dim("шири", "B"),
+        "t_mm":           _find_exact(header, "T", "t"),
         "mass_kg":        _find(hl, "масс", "вес"),
         "analog_ref":     _find(hl, "аналог"),
         "price_rub":      _find(hl, "цен"),
