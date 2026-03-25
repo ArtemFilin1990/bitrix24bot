@@ -1,0 +1,9 @@
+{
+  "type": "module",
+  "scripts": {
+    "test:worker": "vitest run --config vitest.config.js"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
