@@ -14,6 +14,37 @@ FRONTMATTER_RE = re.compile(r'^---\n(.*?)\n---\n?', re.DOTALL)
 LINK_RE = re.compile(r'\[([^\]]+)\]\((?!https?:|mailto:|#)([^)]+)\)')
 
 
+def _split_text(content: str, chunk_size: int) -> list[str]:
+    """Split *content* into parts of at most *chunk_size* chars each.
+
+    Tries natural boundaries in order: paragraph break (\\n\\n), sentence
+    end ('. '), word boundary (' ').  Falls back to a hard cut only when no
+    whitespace is found within the window.
+    """
+    if not content:
+        return []
+    if len(content) <= chunk_size:
+        return [content]
+    parts: list[str] = []
+    while len(content) > chunk_size:
+        cut = content.rfind('\n\n', 0, chunk_size)
+        if cut < 0:
+            cut = content.rfind('. ', 0, chunk_size)
+            if cut >= 0:
+                cut += 1  # keep the period
+        if cut < 0:
+            cut = content.rfind(' ', 0, chunk_size)
+        if cut <= 0:
+            cut = chunk_size
+        chunk = content[:cut].strip()
+        if chunk:
+            parts.append(chunk)
+        content = content[cut:].strip()
+    if content:
+        parts.append(content)
+    return parts
+
+
 @dataclass
 class Document:
     source_repo: str
@@ -56,11 +87,14 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def strip_markdown(text: str) -> str:
-    text = re.sub(r'```[\s\S]*?```', ' ', text)
-    text = re.sub(r'`([^`]+)`', r'\1', text)
-    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', ' ', text)
-    text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
-    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'```[\s\S]*?```', ' ', text)           # fenced code blocks
+    text = re.sub(r'`([^`]+)`', r'\1', text)              # inline code
+    text = re.sub(r'<[^>]+>', ' ', text)                   # HTML tags
+    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', ' ', text)     # images
+    text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)  # links → anchor text
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # headings
+    text = re.sub(r'^\|.*\|$', ' ', text, flags=re.MULTILINE)   # table rows
+    text = re.sub(r'^[ \t]*[-|]{3,}[ \t]*$', ' ', text, flags=re.MULTILINE)  # HR / table dividers
     text = re.sub(r'[>*_~]', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
@@ -75,14 +109,17 @@ def chunk_markdown(text: str, chunk_size: int = 1200) -> list[dict]:
 
     def flush() -> None:
         content = '\n'.join(body).strip()
+        body.clear()
         if not content:
             return
-        chunks.append({
-            'heading_path': ' > '.join(headings) if headings else '',
-            'content': content,
-            'tokens_est': max(1, len(content) // 4),
-        })
-        body.clear()
+        # Skip empty heading levels so "H1 >  > H3" becomes "H1 > H3"
+        hp = ' > '.join(h for h in headings if h)
+        for sub in _split_text(content, chunk_size):
+            chunks.append({
+                'heading_path': hp,
+                'content': sub,
+                'tokens_est': max(1, len(sub) // 4),
+            })
 
     for line in lines:
         match = re.match(r'^(#{1,3})\s+(.+?)\s*$', line)
@@ -104,11 +141,10 @@ def chunk_markdown(text: str, chunk_size: int = 1200) -> list[dict]:
     return [
         {
             'heading_path': '',
-            'content': plain[i:i + chunk_size].strip(),
-            'tokens_est': max(1, len(plain[i:i + chunk_size].strip()) // 4),
+            'content': sub,
+            'tokens_est': max(1, len(sub) // 4),
         }
-        for i in range(0, len(plain), chunk_size)
-        if plain[i:i + chunk_size].strip()
+        for sub in _split_text(plain, chunk_size)
     ]
 
 
