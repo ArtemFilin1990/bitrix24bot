@@ -1,10 +1,15 @@
-name: Process inbox → D1
+name: Process inbox -> D1
 
 on:
   push:
     branches: [main]
     paths:
       - 'inbox/**'
+  workflow_dispatch:
+    inputs:
+      cf_token:
+        description: 'Cloudflare API Token (overrides secret)'
+        required: false
 
 jobs:
   process-inbox:
@@ -26,9 +31,8 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Found $count file(s) to process"
 
-      - name: Set up Python
+      - uses: actions/setup-python@v5
         if: steps.check.outputs.count != '0'
-        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -45,10 +49,9 @@ jobs:
       - name: Apply SQL to D1
         if: steps.check.outputs.count != '0'
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          wrangler d1 execute bearings-catalog --file /tmp/inbox.sql --remote
+        run: wrangler d1 execute bearings-catalog --file /tmp/inbox.sql --remote
 
       - name: Delete processed files and commit
         if: steps.check.outputs.count != '0'

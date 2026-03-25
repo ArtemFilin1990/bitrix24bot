@@ -1,27 +1,25 @@
 name: Seed Database
 
 on:
-  push:
-    branches:
-      - 'claude/add-claude-documentation-S4PXJ'
-    paths:
-      - '.github/workflows/seed-database.yml'
   workflow_dispatch:
     inputs:
+      cf_token:
+        description: 'Cloudflare API Token (overrides secret)'
+        required: false
       apply_schema:
-        description: 'Apply schema.sql (safe to re-run)'
+        description: 'Apply schema.sql'
         required: false
         default: 'true'
       seed_bearings:
-        description: 'Seed bearings/catalog/analogs/brands from BearingsInfo'
+        description: 'Seed bearings/catalog/analogs/brands'
         required: false
         default: 'true'
       seed_kb:
-        description: 'Seed knowledge base from knowledge-base repo'
+        description: 'Seed knowledge base'
         required: false
         default: 'true'
       register_bot:
-        description: 'Register bot with Bitrix24 after seeding'
+        description: 'Register bot with Bitrix24'
         required: false
         default: 'true'
 
@@ -29,16 +27,13 @@ jobs:
   seed:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout bitrix24bot
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '24'
 
@@ -46,20 +41,18 @@ jobs:
         run: npm install -g wrangler@4.76.0
 
       - name: Apply schema
-        if: ${{ github.event_name == 'push' || github.event.inputs.apply_schema == 'true' }}
-        run: |
-          echo "Applying schema.sql..."
-          wrangler d1 execute bearings-catalog --file schema.sql --remote
+        if: ${{ github.event.inputs.apply_schema == 'true' }}
+        run: wrangler d1 execute bearings-catalog --file schema.sql --remote
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Clone BearingsInfo
-        if: ${{ github.event_name == 'push' || github.event.inputs.seed_bearings == 'true' }}
+        if: ${{ github.event.inputs.seed_bearings == 'true' }}
         run: git clone --depth=1 https://github.com/ArtemFilin1990/BearingsInfo.git /tmp/BearingsInfo
 
-      - name: Generate bearings seed
-        if: ${{ github.event_name == 'push' || github.event.inputs.seed_bearings == 'true' }}
+      - name: Generate & apply bearings seed
+        if: ${{ github.event.inputs.seed_bearings == 'true' }}
         run: |
           SNAPSHOT=$(git -C /tmp/BearingsInfo rev-parse HEAD)
           python scripts/build_bearings_seed.py \
@@ -67,24 +60,17 @@ jobs:
             --output /tmp/bearings.seed.sql \
             --source-repo ArtemFilin1990/BearingsInfo \
             --source-snapshot "$SNAPSHOT"
-          echo "Generated bearings seed:"
-          wc -l /tmp/bearings.seed.sql
-
-      - name: Apply bearings seed
-        if: ${{ github.event_name == 'push' || github.event.inputs.seed_bearings == 'true' }}
-        run: |
-          echo "Applying bearings seed..."
           wrangler d1 execute bearings-catalog --file /tmp/bearings.seed.sql --remote
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Clone knowledge-base
-        if: ${{ github.event_name == 'push' || github.event.inputs.seed_kb == 'true' }}
+        if: ${{ github.event.inputs.seed_kb == 'true' }}
         run: git clone --depth=1 https://github.com/ArtemFilin1990/knowledge-base.git /tmp/knowledge-base
 
-      - name: Generate KB seed
-        if: ${{ github.event_name == 'push' || github.event.inputs.seed_kb == 'true' }}
+      - name: Generate & apply KB seed
+        if: ${{ github.event.inputs.seed_kb == 'true' }}
         run: |
           SNAPSHOT=$(git -C /tmp/knowledge-base rev-parse HEAD)
           python scripts/build_kb_seed.py \
@@ -92,49 +78,31 @@ jobs:
             --output /tmp/kb.seed.sql \
             --source-repo ArtemFilin1990/knowledge-base \
             --source-snapshot "$SNAPSHOT"
-          echo "Generated KB seed:"
-          wc -l /tmp/kb.seed.sql
-
-      - name: Apply KB seed
-        if: ${{ github.event_name == 'push' || github.event.inputs.seed_kb == 'true' }}
-        run: |
-          echo "Applying knowledge base seed..."
           wrangler d1 execute bearings-catalog --file /tmp/kb.seed.sql --remote
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Register bot with Bitrix24
-        if: ${{ github.event_name == 'push' || github.event.inputs.register_bot == 'true' }}
+        if: ${{ github.event.inputs.register_bot == 'true' }}
         run: |
-          echo "Fetching worker subdomain from Cloudflare..."
           SUBDOMAIN=$(curl -sf \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['subdomain'])")
           WORKER_URL="https://bitrix24bot.${SUBDOMAIN}.workers.dev"
-          echo "Registering bot at ${WORKER_URL}/register ..."
+          echo "Registering bot at ${WORKER_URL}/register"
           RESULT=$(curl -sf "${WORKER_URL}/register" || echo '{"error":"curl failed"}')
-          echo "Registration result: $RESULT"
+          echo "Result: $RESULT"
           echo "$RESULT" | python3 -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          if d.get('ok'):
-              print('Bot registered successfully! BOT_ID =', d.get('bot_id'))
-              print('IMPORTANT: save BOT_ID via: wrangler secret put BOT_ID')
-          elif 'error' in d:
-              print('Registration error:', d['error'])
-              exit(1)
-          "
+import sys,json
+d=json.load(sys.stdin)
+if d.get('ok'):
+    print('Bot registered! BOT_ID =', d.get('bot_id'))
+elif 'error' in d:
+    print('Error:', d['error'])
+    exit(1)
+"
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Self-cleanup - remove this workflow
-        if: ${{ github.event_name == 'push' }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/seed-database.yml
-          git commit -m "chore: remove one-time seed-database workflow [skip ci]"
-          git push
