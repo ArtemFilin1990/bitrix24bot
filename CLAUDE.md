@@ -44,7 +44,9 @@ bitrix24bot/
 ├── SITEMAP.md             # Repository navigation guide
 └── .github/workflows/
     ├── deploy.yml         # CI/CD: push to main (non-inbox) → deploy to Cloudflare Workers
-    └── process-inbox.yml  # CI/CD: push to main (inbox/ changes) → process files into D1
+    ├── process-inbox.yml  # CI/CD: push to main (inbox/ changes) → process files into D1
+    ├── seed-database.yml  # Manual/push: apply schema + seed bearings + KB + register bot
+    └── check-db.yml       # Manual: query D1 table counts and last ingest timestamps
 ```
 
 The repository root also contains 100+ Markdown reference documents covering GOST/ISO bearing standards, bearing types, manufacturers, and technical specifications.
@@ -315,6 +317,17 @@ Must be done once after initial deployment.
 - Commit messages: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:` prefixes.
 - The `.gitignore` excludes `*.sh` (secrets/scripts), `.wrangler/` (local build artifacts), `__pycache__/`, `*.pyc`, `*.pyo`.
 - The `process-inbox.yml` workflow uses `[skip ci]` in auto-commits to prevent deploy loops.
+
+**GitHub Actions workflows (4 total):**
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `deploy.yml` | Push to `main` (non-`inbox/` paths) or `workflow_dispatch` | Build & deploy Worker via `wrangler deploy` |
+| `process-inbox.yml` | Push to `main` (`inbox/**` paths) or `workflow_dispatch` | Process inbox files → D1; auto-delete + commit `[skip ci]` |
+| `seed-database.yml` | Push to `main` (own file changes) or `workflow_dispatch` | Apply `schema.sql`, clone & seed BearingsInfo + knowledge-base, register bot |
+| `check-db.yml` | `workflow_dispatch` only | Query D1 row counts and last ingest audit rows (read-only diagnostic) |
+
+All workflows use `wrangler@4.76.0` and Node.js 24. `deploy.yml` and `seed-database.yml` accept an optional `cf_token` input to override `secrets.CLOUDFLARE_API_TOKEN`.
 
 ---
 
