@@ -1,3 +1,8 @@
+---
+title: "Автомобильныe комплекты подшипников SKF, FAG, SNR, TIMKEN, FERSA A&S, QH"
+tags: [FAG, FERSA, NTN, SKF, TIMKEN, автомобильные подшипники, подшипники, производители]
+---
+
 # Автомобильныe комплекты подшипников SKF, FAG, SNR, TIMKEN, FERSA A&S, QH
 
 Источник: /cgi-bin/article.pl?words=skf_vkba

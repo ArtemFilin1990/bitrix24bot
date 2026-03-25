@@ -344,6 +344,31 @@ class ProcessInboxTests(unittest.TestCase):
             conn.executescript(seed.read_text(encoding="utf-8"))
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM catalog").fetchone()[0], 2)
 
+    def test_ingest_run_recorded(self):
+        """process_inbox.py must write an audit record to kb_ingest_runs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = Path(tmp) / "inbox.sql"
+            self.run_script(FIXTURE, seed, source_repo="my-org/bitrix24bot")
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+
+            row = cur.execute(
+                "SELECT source_snapshot, files_seen, files_loaded, files_skipped, notes "
+                "FROM kb_ingest_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(row, "kb_ingest_runs should have at least one record")
+            source_snapshot, files_seen, files_loaded, files_skipped, notes = row
+            self.assertEqual(source_snapshot, "my-org/bitrix24bot")
+            self.assertGreater(files_seen, 0)
+            self.assertEqual(files_loaded, files_seen)
+            self.assertEqual(files_skipped, 0)
+            import json
+            notes_obj = json.loads(notes)
+            self.assertIn("docs", notes_obj)
+            self.assertIn("catalog", notes_obj)
+            self.assertIn("analogs", notes_obj)
+            self.assertIn("brands", notes_obj)
+
     def test_empty_inbox_produces_valid_sql(self):
         """An empty inbox directory should still generate valid (no-op) SQL."""
         with tempfile.TemporaryDirectory() as tmp:

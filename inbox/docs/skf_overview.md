@@ -1,3 +1,8 @@
+---
+title: SKF (Svenska Kullagerfabriken) – Overview
+tags: [SKF, производители]
+---
+
 # SKF (Svenska Kullagerfabriken) – Overview
 
 ## История компании в России

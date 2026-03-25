@@ -1,3 +1,8 @@
+---
+title: Подшипники SKF EXPLORER
+tags: [SKF, подшипники, производители]
+---
+
 # Подшипники SKF EXPLORER
 
 Источник: /cgi-bin/article.pl?words=skf_explorer
