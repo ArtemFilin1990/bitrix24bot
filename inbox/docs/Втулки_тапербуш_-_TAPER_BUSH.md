@@ -1,3 +1,8 @@
+---
+title: Втулки тапербуш - TAPER BUSH
+tags: [закрепительные втулки]
+---
+
 # Втулки тапербуш - TAPER BUSH
 
 Источник: /cgi-bin/article.pl?words=vtulki_taper_bush
