@@ -1,0 +1,45 @@
+name: Check DB Status
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@4.76.0
+
+      - name: Query D1 table counts
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo '=== D1 Database Status ==='
+          for TABLE in bearings catalog analogs brands kb_documents kb_chunks knowledge; do
+            COUNT=$(wrangler d1 execute bearings-catalog \
+              --command "SELECT COUNT(*) as n FROM ${TABLE}" \
+              --remote --json 2>/dev/null \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['results'][0]['n'])" 2>/dev/null || echo 'error')
+            echo "  ${TABLE}: ${COUNT}"
+          done
+
+          echo ''
+          echo '=== Bearing ingest runs ==='
+          wrangler d1 execute bearings-catalog \
+            --command "SELECT source_repo, source_snapshot, inserted_at FROM bearing_ingest_runs ORDER BY id DESC LIMIT 2" \
+            --remote --json 2>/dev/null \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); [print(r) for r in d[0].get('results',[])]"
+
+          echo ''
+          echo '=== KB ingest runs ==='
+          wrangler d1 execute bearings-catalog \
+            --command "SELECT source_repo, docs_upserted, inserted_at FROM kb_ingest_runs ORDER BY id DESC LIMIT 3" \
+            --remote --json 2>/dev/null \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); [print(r) for r in d[0].get('results',[])]"
+
+          echo ''
+          echo '=== Worker deployments ==='
+          wrangler deployments list --name bitrix24bot 2>&1 | head -15
