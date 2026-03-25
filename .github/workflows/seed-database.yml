@@ -1,6 +1,10 @@
 name: Seed Database
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/seed-database.yml'
   workflow_dispatch:
     inputs:
       cf_token:
@@ -41,18 +45,18 @@ jobs:
         run: npm install -g wrangler@4.76.0
 
       - name: Apply schema
-        if: ${{ github.event.inputs.apply_schema == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.apply_schema == 'true' }}
         run: wrangler d1 execute bearings-catalog --file schema.sql --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Clone BearingsInfo
-        if: ${{ github.event.inputs.seed_bearings == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.seed_bearings == 'true' }}
         run: git clone --depth=1 https://github.com/ArtemFilin1990/BearingsInfo.git /tmp/BearingsInfo
 
       - name: Generate & apply bearings seed
-        if: ${{ github.event.inputs.seed_bearings == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.seed_bearings == 'true' }}
         run: |
           SNAPSHOT=$(git -C /tmp/BearingsInfo rev-parse HEAD)
           python scripts/build_bearings_seed.py \
@@ -66,11 +70,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Clone knowledge-base
-        if: ${{ github.event.inputs.seed_kb == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.seed_kb == 'true' }}
         run: git clone --depth=1 https://github.com/ArtemFilin1990/knowledge-base.git /tmp/knowledge-base
 
       - name: Generate & apply KB seed
-        if: ${{ github.event.inputs.seed_kb == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.seed_kb == 'true' }}
         run: |
           SNAPSHOT=$(git -C /tmp/knowledge-base rev-parse HEAD)
           python scripts/build_kb_seed.py \
@@ -84,7 +88,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Register bot with Bitrix24
-        if: ${{ github.event.inputs.register_bot == 'true' }}
+        if: ${{ github.event_name == 'push' || github.event.inputs.register_bot == 'true' }}
         run: |
           SUBDOMAIN=$(curl -sf \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
