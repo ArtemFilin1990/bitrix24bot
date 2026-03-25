@@ -355,9 +355,17 @@ def main() -> None:
         sql_parts.append(process_brands(csv_file))
         stats["brands"] += 1
 
-    sql_parts.append("COMMIT;")
-
     stats["total_files"] = stats["docs"] + stats["catalog"] + stats["analogs"] + stats["brands"]
+    notes = json.dumps(
+        {"docs": stats["docs"], "catalog": stats["catalog"],
+         "analogs": stats["analogs"], "brands": stats["brands"]},
+        ensure_ascii=False,
+    )
+    sql_parts.append(
+        f"INSERT INTO kb_ingest_runs (source_snapshot, files_seen, files_loaded, files_skipped, finished_at, notes) "
+        f"VALUES ({sql_quote(source_repo)}, {stats['total_files']}, {stats['total_files']}, 0, CURRENT_TIMESTAMP, {sql_quote(notes)});"
+    )
+    sql_parts.append("COMMIT;")
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
