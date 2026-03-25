@@ -20,49 +20,63 @@
 ```
 bitrix24bot/
 ├── b24-imbot/
-│   ├── worker.js          # Main Cloudflare Worker — all bot logic lives here
+│   ├── worker.js          # Main Cloudflare Worker — all bot logic lives here (~1,240 lines)
 │   └── wrangler.toml      # Worker-specific Wrangler config (local overrides)
 ├── scripts/
 │   ├── build_bearings_seed.py  # Generate SQL seed from BearingsInfo CSV sources
-│   └── build_kb_seed.py        # Generate SQL seed from knowledge-base markdown
+│   ├── build_kb_seed.py        # Generate SQL seed from knowledge-base markdown
+│   └── process_inbox.py        # Process inbox/ folder files into idempotent SQL
 ├── tests/
 │   ├── fixtures/
 │   │   ├── BearingsInfo/       # Sample CSVs for bearing pipeline tests
-│   │   └── knowledge-base/     # Sample markdown/JSON for KB pipeline tests
+│   │   ├── knowledge-base/     # Sample markdown/JSON for KB pipeline tests
+│   │   └── inbox/              # Sample inbox files (docs, catalog, analogs, brands)
 │   ├── test_build_bearings_seed.py
-│   └── test_build_kb_seed.py
+│   ├── test_build_kb_seed.py
+│   └── test_process_inbox.py
+├── inbox/
+│   ├── catalog/           # Drop CSV files here to import into catalog table
+│   ├── analogs/           # Drop CSV files here to import analog mappings
+│   ├── brands/            # Drop CSV files here to import brand metadata
+│   └── docs/              # Drop Markdown files here to import into knowledge base
 ├── schema.sql             # D1 database schema (SQLite + FTS5)
 ├── wrangler.toml          # Root Wrangler config (production bindings)
+├── SITEMAP.md             # Repository navigation guide
 └── .github/workflows/
-    └── deploy.yml         # CI/CD: push to main → deploy to Cloudflare Workers
+    ├── deploy.yml         # CI/CD: push to main (non-inbox) → deploy to Cloudflare Workers
+    └── process-inbox.yml  # CI/CD: push to main (inbox/ changes) → process files into D1
 ```
+
+The repository root also contains 100+ Markdown reference documents covering GOST/ISO bearing standards, bearing types, manufacturers, and technical specifications.
 
 ---
 
 ## Architecture & Data Flow
 
 ```
-External Git repos
-  BearingsInfo/         knowledge-base/
-       │                      │
-       ▼                      ▼
-  build_bearings_seed.py   build_kb_seed.py
-       │                      │
-       └──────┬───────────────┘
-              ▼
-         *.seed.sql  (idempotent SQL)
-              │
-              ▼  wrangler d1 execute
-         D1 SQLite (Cloudflare)
-         ├── bearings, catalog, analogs, brands
-         └── kb_documents, kb_chunks, kb_chunks_fts, ...
-              │
-              ▼
-         worker.js  (Cloudflare Worker)
-         ├── POST /imbot   ← Bitrix24 webhook
-         ├── askGemini()   → Gemini 2.0 Flash API
-         │     └── executeTool()  → D1 queries
-         └── botReply()    → Bitrix24 REST API
+External Git repos          inbox/ folder (git-tracked)
+  BearingsInfo/  knowledge-base/  │
+       │               │          │ (CSV/Markdown commits)
+       ▼               ▼          ▼
+  build_bearings_  build_kb_   process_inbox.py
+     seed.py         seed.py       │
+       │               │          │
+       └───────┬────────┘          │
+               ▼                   ▼
+          *.seed.sql           /tmp/inbox.sql
+               │                   │
+               └─────────┬─────────┘
+                          ▼  wrangler d1 execute
+                     D1 SQLite (Cloudflare)
+                     ├── bearings, catalog, analogs, brands
+                     └── kb_documents, kb_chunks, kb_chunks_fts, ...
+                          │
+                          ▼
+                     worker.js  (Cloudflare Worker)
+                     ├── POST /imbot   ← Bitrix24 webhook
+                     ├── askGemini()   → Gemini 2.0 Flash API
+                     │     └── executeTool()  → D1 queries
+                     └── botReply()    → Bitrix24 REST API
 ```
 
 ---
@@ -71,7 +85,7 @@ External Git repos
 
 ### `b24-imbot/worker.js`
 
-The entire bot logic in one file (~1,237 lines). Major sections:
+The entire bot logic in one file (~1,240 lines). Major sections:
 
 | Section | Description |
 |---|---|
@@ -79,19 +93,37 @@ The entire bot logic in one file (~1,237 lines). Major sections:
 | `TOOLS` array | 9 function definitions sent to Gemini: `get_deal`, `search_deals`, `get_company`, `get_deal_products`, `get_my_deals`, `search_catalog`, `search_knowledge`, `search_brand`, `search_analogs` |
 | `b24(env, method, params)` | Bitrix24 REST API HTTP wrapper |
 | `botReply(env, chatId, text)` | Send BB-code message to Bitrix24 chat |
+| `extractHeadingChunks(markdown)` | Parse markdown into heading-aware chunks (1200 chars max) |
+| `stripMarkdown(markdown)` | Remove markdown formatting for plain text indexing |
+| `upsertKnowledgeDocument(env, {...})` | Insert/update KB doc with chunks, tags, links, FTS sync |
 | `askGemini(env, history, userText)` | Iterative Gemini function-calling loop (max 5 iterations) |
 | `executeTool(toolName, args, env)` | Dispatch tool calls to D1 queries or Bitrix24 API |
 | `getHistory / saveHistory` | KV conversation history (last 20 turns, 24-hour TTL) |
-| Import endpoints | `/import-catalog`, `/import-catalog-csv`, `/import-catalog-crm`, `/import-doc`, `/import-doc-bulk`, `/import-brands-bulk`, `/import-analogs` |
-| Main handler | Route dispatch: `/imbot` (webhook), `/register`, `/discover-catalog`, `/preview-file` |
 
 **Text formatting**: Bitrix24 uses BB-code: `[B]bold[/B]`, `[I]italic[/I]`, `[U]underline[/U]` — not markdown.
 
 **Group chat filtering**: Bot only responds if message contains keywords like "подшипник", "сделка", "цена", "каталог", "заказ", etc., or the bot is @-mentioned.
 
+**Endpoints (12 total):**
+
+| Route | Method | Auth | Description |
+|---|---|---|---|
+| `/imbot` | POST | B24 signature | Main webhook for incoming Bitrix24 messages |
+| `/register` | GET | None | Register bot with Bitrix24 (run once after deploy) |
+| `/reset` | POST | None | Clear a user's conversation history in KV |
+| `/import-catalog` | GET | IMPORT_SECRET | Import semicolon-delimited CSV from Bitrix24 Disk |
+| `/import-catalog-csv` | GET | IMPORT_SECRET | Import extended CSV with auto-detected columns |
+| `/import-catalog-crm` | GET | IMPORT_SECRET | Import from Bitrix24 trade or CRM catalog iblock |
+| `/import-doc` | GET | IMPORT_SECRET | Import single Markdown doc from Disk |
+| `/import-doc-bulk` | POST | IMPORT_SECRET | Bulk import docs (JSON array) |
+| `/import-brands-bulk` | POST | IMPORT_SECRET | Bulk import brands (JSON array) |
+| `/import-analogs` | GET | IMPORT_SECRET | Import analog mappings from CSV |
+| `/discover-catalog` | GET | IMPORT_SECRET | List available Bitrix24 catalog iblock IDs |
+| `/preview-file` | GET | IMPORT_SECRET | Preview first N lines of a Disk file |
+
 ### `schema.sql`
 
-Canonical D1 schema. Key tables:
+Canonical D1 schema (238 lines). Key tables:
 
 | Table | Purpose |
 |---|---|
@@ -104,7 +136,7 @@ Canonical D1 schema. Key tables:
 | `kb_chunks_fts` | FTS5 virtual table (auto-synced via triggers) |
 | `kb_tags`, `kb_document_tags` | Many-to-many tagging |
 | `kb_links` | Internal markdown link graph |
-| `knowledge` | Legacy flat table for backwards-compatible queries |
+| `knowledge` | Legacy flat table for backwards-compatible queries (auto-synced via triggers) |
 | `bearing_ingest_runs`, `kb_ingest_runs` | Audit log for data imports |
 
 ### `scripts/build_bearings_seed.py`
@@ -144,6 +176,28 @@ python scripts/build_kb_seed.py \
 | `_meta/**/*.{md,json}` | meta | no |
 | `inbox/**, scripts/**, tests/**, .github/` | — | **SKIPPED** |
 
+### `scripts/process_inbox.py`
+
+Processes files committed to the `inbox/` folder and generates idempotent SQL for D1. This is the primary workflow for day-to-day data updates — drop files into `inbox/` subfolders and commit to `main`.
+
+```bash
+python scripts/process_inbox.py \
+  --inbox inbox \
+  --output /tmp/inbox.sql \
+  --source-repo ArtemFilin1990/bitrix24bot
+```
+
+**Processes four inbox subfolder types:**
+
+| Subfolder | Content | Target Tables |
+|---|---|---|
+| `inbox/docs/` | Markdown files (with optional YAML frontmatter) | `kb_documents`, `kb_chunks`, `kb_tags`, `kb_links`, `kb_chunks_fts`, `knowledge` |
+| `inbox/catalog/` | CSV files (comma or semicolon separated, Russian/English headers) | `catalog` |
+| `inbox/analogs/` | CSV files with `brand`, `designation`, `analog_designation`, `analog_brand`, `factory` | `analogs` |
+| `inbox/brands/` | CSV files with `name`, `description`, `logo_url`, `search_url` | `brands` |
+
+After processing, the CI workflow auto-deletes the processed files and commits with `[skip ci]`.
+
 ---
 
 ## Development Workflows
@@ -160,6 +214,7 @@ Tests use in-memory SQLite (`:memory:`) — no Cloudflare account or D1 required
 Test files:
 - `tests/test_build_bearings_seed.py` — verifies catalog/analog/brand counts and idempotency
 - `tests/test_build_kb_seed.py` — verifies document classification, FTS indexing, and idempotency
+- `tests/test_process_inbox.py` — verifies inbox/ processing for docs, catalog, analogs, brands, and FTS
 
 ### Deploying the Worker
 
@@ -170,7 +225,7 @@ wrangler deploy
 wrangler deploy --config b24-imbot/wrangler.toml
 ```
 
-Deployment is also automated via GitHub Actions on push to `main`.
+Deployment is automated via GitHub Actions on push to `main` (excluding `inbox/` path changes).
 
 ### Loading Data into D1
 
@@ -185,7 +240,20 @@ wrangler d1 execute bearings-catalog --file /tmp/bearings.sql
 # Generate and apply knowledge base seed
 python scripts/build_kb_seed.py --source-dir ../knowledge-base --output /tmp/kb.sql
 wrangler d1 execute bearings-catalog --file /tmp/kb.sql
+
+# Process inbox files manually
+python scripts/process_inbox.py --inbox inbox --output /tmp/inbox.sql
+wrangler d1 execute bearings-catalog --file /tmp/inbox.sql --remote
 ```
+
+### Using the Inbox Workflow
+
+The easiest way to add data is the inbox/ git workflow:
+
+1. Copy files into the appropriate `inbox/` subfolder
+2. Commit and push to `main`
+3. GitHub Actions (`process-inbox.yml`) automatically processes the files and loads them into D1
+4. Processed files are auto-deleted in a follow-up `[skip ci]` commit
 
 ### Registering the Bot
 
@@ -194,22 +262,6 @@ GET <worker-url>/register?secret=<IMPORT_SECRET>
 ```
 
 Must be done once after initial deployment.
-
-### Import Endpoints (Admin)
-
-All require `?secret=<IMPORT_SECRET>` header or query param.
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/import-catalog` | GET | Import semicolon-delimited CSV from Bitrix24 Disk |
-| `/import-catalog-csv` | GET | Import extended CSV with auto-detected columns |
-| `/import-catalog-crm` | GET | Import from Bitrix24 trade or CRM catalog |
-| `/import-doc` | GET | Import single Markdown doc from Disk |
-| `/import-doc-bulk` | POST | Bulk import docs (JSON array) |
-| `/import-brands-bulk` | POST | Bulk import brands (JSON array) |
-| `/import-analogs` | GET | Import analog mappings from CSV |
-| `/discover-catalog` | GET | List available Bitrix24 catalog iblock IDs |
-| `/preview-file` | GET | Preview first N lines of a Disk file |
 
 ---
 
@@ -224,11 +276,12 @@ All require `?secret=<IMPORT_SECRET>` header or query param.
   - `env.IMPORT_SECRET` — Secret for admin import endpoints
   - `env.BOT_ID` — Bitrix24 bot ID
   - `env.CHAT_HISTORY` — KV namespace binding
-  - `env.DB` — D1 database binding
+  - `env.CATALOG` — D1 database binding (note: binding name is `CATALOG`, not `DB`)
 - **Error handling**: wrap tool calls in try/catch, return error strings that Gemini can relay to the user.
 - **Bitrix24 text format**: always use BB-code, never markdown, in bot replies.
 - **History trimming**: keep last 20 turns (40 messages) to stay within Gemini context limits.
 - **Function calling loop**: max 5 Gemini iterations per user message to prevent infinite loops.
+- **D1 queries**: use prepared statements — `env.CATALOG.prepare(...).bind(...).all()`.
 
 ### Python (scripts/)
 
@@ -236,7 +289,7 @@ All require `?secret=<IMPORT_SECRET>` header or query param.
 - No third-party dependencies — stdlib only.
 - **Idempotency is critical**: all seeds must be safe to re-run. Use `DELETE WHERE source_repo=...` before re-inserting.
 - **SQL escaping**: use the project's `sql_quote()` / `sql_value()` helpers — do not use f-strings directly for SQL values.
-- **CSV reading**: always use `read_csv()` helper (handles UTF-8 BOM and semicolon delimiters).
+- **CSV reading**: always use `read_csv()` / `_read_csv()` helpers (handles UTF-8 BOM, semicolon/comma delimiters).
 - **Logging**: print progress to stdout; use `bearing_ingest_runs` / `kb_ingest_runs` tables for audit.
 
 ### SQL / Schema
@@ -260,7 +313,8 @@ All require `?secret=<IMPORT_SECRET>` header or query param.
 - Feature branches follow the pattern: `claude/<task-name>-<id>` or `codex/<task-name>`.
 - PRs are merged into `main`; `main` auto-deploys via GitHub Actions.
 - Commit messages: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:` prefixes.
-- The `.gitignore` excludes `*.sh` (secrets/scripts) and `.wrangler/` (local build artifacts).
+- The `.gitignore` excludes `*.sh` (secrets/scripts), `.wrangler/` (local build artifacts), `__pycache__/`, `*.pyc`, `*.pyo`.
+- The `process-inbox.yml` workflow uses `[skip ci]` in auto-commits to prevent deploy loops.
 
 ---
 
@@ -271,9 +325,14 @@ All require `?secret=<IMPORT_SECRET>` header or query param.
 | `GEMINI_API_KEY` | Cloudflare Worker secret | Google Gemini API access |
 | `BITRIX_WEBHOOK_URL` | Cloudflare Worker secret | Bitrix24 REST endpoint |
 | `IMPORT_SECRET` | Cloudflare Worker secret | Protects admin import endpoints |
+| `WORKER_HOST` | Cloudflare Worker secret | Worker domain (for registration callback) |
+| `B24_PORTAL` | Cloudflare Worker secret | Bitrix24 portal URL |
+| `B24_USER_ID` | Cloudflare Worker secret | Bitrix24 REST auth user ID |
+| `B24_TOKEN` | Cloudflare Worker secret | Bitrix24 REST auth token |
 | `BOT_ID` | `wrangler.toml` vars | Bitrix24 bot registration ID |
 | `CLIENT_ID` | `wrangler.toml` vars | Bitrix24 app client ID |
 | `CLOUDFLARE_API_TOKEN` | GitHub Actions secret | Wrangler deployment auth |
+| `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions secret | Cloudflare account ID for D1 remote access |
 
 Secrets are set via `wrangler secret put <NAME>` — never commit secret values.
 
@@ -285,7 +344,7 @@ Secrets are set via `wrangler secret put <NAME>` — never commit secret values.
 
 1. Add function definition to the `TOOLS` array in `worker.js` with name, description, and parameters schema.
 2. Add the corresponding handler case in `executeTool()`.
-3. If it queries D1, write the SQL using prepared statements: `env.DB.prepare(...).bind(...).all()`.
+3. If it queries D1, write the SQL using prepared statements: `env.CATALOG.prepare(...).bind(...).all()`.
 4. Update `SYSTEM_PROMPT` to instruct Gemini when/how to use the new tool.
 
 ### Adding a New Import Endpoint
@@ -307,6 +366,14 @@ Secrets are set via `wrangler secret put <NAME>` — never commit secret values.
 2. Add fixture files in `tests/fixtures/knowledge-base/`.
 3. Add test assertions in `test_build_kb_seed.py`.
 
+### Adding a New Inbox Data Type
+
+1. Add a new subfolder under `inbox/` (e.g., `inbox/newtype/`).
+2. Add a `process_newtype(path)` function in `scripts/process_inbox.py`.
+3. Wire it into the main `process_inbox()` dispatcher.
+4. Add fixture files in `tests/fixtures/inbox/newtype/`.
+5. Add test assertions in `tests/test_process_inbox.py`.
+
 ---
 
 ## Bearing Domain Context
@@ -317,7 +384,7 @@ The bot works with Russian and international bearing standards:
 - **ISO**: International standard (e.g., `6205`, `NU 205`)
 - **Brand codes**: Manufacturer-specific (e.g., SKF `6205`, FAG `6205.C3`)
 - **Size matching**: d × D × B (inner diameter × outer diameter × width in mm)
-- **Key brands**: SKF, FAG, NSK, NTN, KOYO, TIMKEN, INA, IKO, ZKL, GPZ
+- **Key brands**: SKF, FAG, NSK, NTN, KOYO, TIMKEN, INA, IKO, ZKL, GPZ, CRAFT, BBC-R, ГПЗ, АПП
 
 Search priority in `search_catalog`: exact designation match → GOST/ISO ref match → size match.
 
