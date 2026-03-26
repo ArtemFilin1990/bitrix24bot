@@ -23,6 +23,13 @@ ANALOG_FILES = (
     "data/analogs/iso_to_gost.csv",
     "data/analogs/import_analogs.csv",
 )
+ANALOG_GOST_ISO_FILES = (
+    "data/analogs/gost_iso.csv",
+    "data/analogs/housings.csv",
+    "data/analogs/units.csv",
+)
+NOMENCLATURE_FILE = "data/nomenclature.csv"
+DIMENSIONS_FILE = "data/dimensions/bearing_dimensions.csv"
 
 
 @dataclass(frozen=True)
@@ -133,7 +140,7 @@ def build_bearings(master_rows: list[dict[str, str]]) -> list[BearingRow]:
     return list(bearings.values())
 
 
-def build_catalog(master_rows: list[dict[str, str]]) -> list[CatalogRow]:
+def build_catalog(master_rows: list[dict[str, str]]) -> OrderedDict[str, CatalogRow]:
     catalog: OrderedDict[str, CatalogRow] = OrderedDict()
     for row in master_rows:
         iso = (row.get('ISO') or '').strip()
@@ -172,7 +179,47 @@ def build_catalog(master_rows: list[dict[str, str]]) -> list[CatalogRow]:
                 brand_display=brand,
                 suffix_desc=None,
             )
-    return list(catalog.values())
+    return catalog
+
+
+def build_dimensions_catalog(source_dir: Path, catalog: OrderedDict[str, CatalogRow]) -> None:
+    """Enrich catalog with entries from bearing_dimensions.csv."""
+    dim_path = source_dir / DIMENSIONS_FILE
+    if not dim_path.exists():
+        return
+    for row in read_csv(dim_path):
+        designation = (row.get('Designation') or '').strip()
+        if not designation:
+            continue
+        item_id = f"ref:{designation.lower()}"
+        if item_id in catalog:
+            continue
+        catalog[item_id] = CatalogRow(
+            item_id=item_id,
+            manufacturer='Reference',
+            category_ru=(row.get('Type') or '').strip() or None,
+            subcategory_ru=None,
+            series_ru=((designation[:2] + 'xx') if len(designation) >= 2 else None),
+            name_ru=normalized_text((row.get('Type') or '').strip(), designation) or designation,
+            designation=designation,
+            iso_ref=designation,
+            section='BearingsInfo dimensions',
+            d_mm=parse_float(row.get('d')),
+            big_d_mm=parse_float(row.get('D')),
+            b_mm=parse_float(row.get('B')),
+            t_mm=None,
+            mass_kg=parse_float(row.get('Weight_kg')),
+            analog_ref=None,
+            price_rub=None,
+            qty=None,
+            stock_flag=0,
+            bitrix_section_1='BearingsInfo',
+            bitrix_section_2='dimensions',
+            bitrix_section_3=None,
+            gost_ref=None,
+            brand_display='Reference',
+            suffix_desc=None,
+        )
 
 
 def build_analogs(source_dir: Path) -> list[AnalogRow]:
@@ -208,6 +255,38 @@ def build_analogs(source_dir: Path) -> list[AnalogRow]:
             if gost and designation:
                 analogs[(brand, designation, gost, "ГОСТ")] = AnalogRow(brand, designation, gost, 'ГОСТ', row.get('Source') or 'import_analogs.csv')
                 analogs[("ГОСТ", gost, designation, brand)] = AnalogRow('ГОСТ', gost, designation, brand, row.get('Source') or 'import_analogs.csv')
+
+    # Additional GOST↔ISO analog files (gost_iso.csv, housings.csv, units.csv)
+    for rel_path in ANALOG_GOST_ISO_FILES:
+        path = source_dir / rel_path
+        if not path.exists():
+            continue
+        for row in read_csv(path):
+            gost = (row.get('gost') or '').strip()
+            iso = (row.get('iso') or '').strip()
+            brand = (row.get('brand') or '').strip() or None
+            if gost and iso:
+                analog_brand = brand or 'ISO'
+                analogs[("ГОСТ", gost, iso, analog_brand)] = AnalogRow("ГОСТ", gost, iso, analog_brand, rel_path.split('/')[-1])
+                analogs[(analog_brand, iso, gost, "ГОСТ")] = AnalogRow(analog_brand, iso, gost, "ГОСТ", rel_path.split('/')[-1])
+
+    # Nomenclature: massive cross-brand analog mappings
+    nomenclature_path = source_dir / NOMENCLATURE_FILE
+    if nomenclature_path.exists():
+        for row in read_csv(nomenclature_path):
+            brand = (row.get('Brand') or '').strip()
+            designation = (row.get('Product Name') or '').strip()
+            analog = (row.get('Analog Name') or '').strip()
+            factory = (row.get('Factory') or '').strip()
+            if designation and analog:
+                analogs[(brand or None, designation, analog, factory or None)] = AnalogRow(
+                    brand=brand or None,
+                    designation=designation,
+                    analog_designation=analog,
+                    analog_brand=factory or None,
+                    factory='nomenclature.csv',
+                )
+
     return list(analogs.values())
 
 
@@ -248,7 +327,7 @@ def emit_sql(*, source_repo: str, source_snapshot: str, bearings: Iterable[Beari
         f"INSERT INTO bearing_ingest_runs (source_snapshot, source_repo, files_seen, bearings_loaded, catalog_loaded, analogs_loaded, brands_loaded, finished_at, notes) VALUES ({sql_quote(source_snapshot)}, {sql_quote(source_repo)}, {stats['files_seen']}, {stats['bearings_loaded']}, {stats['catalog_loaded']}, {stats['analogs_loaded']}, {stats['brands_loaded']}, CURRENT_TIMESTAMP, 'seed build');",
         "DELETE FROM bearings WHERE brand = 'Reference';",
         "DELETE FROM catalog WHERE bitrix_section_1 = 'BearingsInfo';",
-        "DELETE FROM analogs WHERE factory IN ('gost_to_iso.csv', 'iso_to_gost.csv', 'import_analogs.csv', 'Каталоги производителей');",
+        "DELETE FROM analogs WHERE factory IN ('gost_to_iso.csv', 'iso_to_gost.csv', 'import_analogs.csv', 'Каталоги производителей', 'gost_iso.csv', 'housings.csv', 'units.csv', 'nomenclature.csv');",
     ]
     if brands:
         brand_names = ', '.join(sql_quote(brand.name) for brand in brands)
@@ -292,10 +371,20 @@ def main() -> None:
     master_path = source_dir / 'data/csv/master_catalog.csv'
     master_rows = read_csv(master_path)
     bearings = build_bearings(master_rows)
-    catalog = build_catalog(master_rows)
+    catalog_dict = build_catalog(master_rows)
+    build_dimensions_catalog(source_dir, catalog_dict)
+    catalog = list(catalog_dict.values())
     analogs = build_analogs(source_dir)
     brands = build_brands(source_dir)
-    files_seen = sum(1 for rel in ('data/csv/master_catalog.csv', *ANALOG_FILES, *BRAND_FILES) if (source_dir / rel).exists())
+    all_source_files = (
+        'data/csv/master_catalog.csv',
+        DIMENSIONS_FILE,
+        NOMENCLATURE_FILE,
+        *ANALOG_FILES,
+        *ANALOG_GOST_ISO_FILES,
+        *BRAND_FILES,
+    )
+    files_seen = sum(1 for rel in all_source_files if (source_dir / rel).exists())
     stats = {
         'files_seen': files_seen,
         'bearings_loaded': len(bearings),

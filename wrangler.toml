@@ -1,8 +1,14 @@
+# Продакшн-конфиг для деплоя через GitHub Actions или `wrangler deploy` из корня репо
+# Перед деплоем установи секреты через `wrangler secret put <NAME>`:
+#   GEMINI_API_KEY, B24_PORTAL, B24_USER_ID, B24_TOKEN,
+#   WORKER_HOST, IMPORT_SECRET, B24_APP_TOKEN (optional)
 name = "bitrix24bot"
 main = "b24-imbot/worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
+# ВАЖНО: BOT_ID и CLIENT_ID можно держать в [vars], т.к. они не являются секретами
+# BOT_ID получается после вызова GET /register, CLIENT_ID — при регистрации приложения
 BOT_ID    = "1267"
 CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
 

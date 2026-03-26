@@ -1,3 +1,5 @@
+# Локальный конфиг для разработки из поддиректории b24-imbot/
+# Для продакшн-деплоя используй корневой wrangler.toml
 name = "b24-imbot"
 main = "worker.js"
 compatibility_date = "2024-01-01"
