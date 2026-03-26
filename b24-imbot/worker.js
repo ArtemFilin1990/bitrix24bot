@@ -619,12 +619,20 @@ async function askGemini(env, history, userText) {
     }
 
     // Выполнить tool calls
-    const fnResults = await Promise.all(fnCalls.map(async p => ({
-      functionResponse: {
-        name: p.functionCall.name,
-        response: { result: await executeTool(env, p.functionCall.name, p.functionCall.args) },
+    const fnResults = await Promise.all(fnCalls.map(async p => {
+      let resultStr;
+      try {
+        resultStr = await executeTool(env, p.functionCall.name, p.functionCall.args);
+      } catch (err) {
+        resultStr = JSON.stringify({ error: err.message });
       }
-    })));
+      return {
+        functionResponse: {
+          name: p.functionCall.name,
+          response: { result: resultStr },
+        },
+      };
+    }));
     contents.push({ role: "user", parts: fnResults });
   }
 
@@ -687,7 +695,7 @@ const CORS = {
 };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
 
     const url = new URL(request.url);
@@ -1150,6 +1158,12 @@ export default {
       const body = await request.text();
       const data = Object.fromEntries(new URLSearchParams(body));
 
+      // Валидация токена приложения (защита от неавторизованных запросов)
+      const appToken = data["auth[application_token]"];
+      if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
+        return json({ error: "Forbidden: Invalid application token" }, 403);
+      }
+
       const event   = data["event"];
       const userId  = data["data[USER][ID]"];
       const chatId  = data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
@@ -1203,28 +1217,31 @@ export default {
       if (message === "/сброс" || message === "/reset") {
         const safe = sanitizeUserId(userId);
         if (safe) await env.CHAT_HISTORY.delete(`history:${safe}`);
-        await botReply(env, chatId, "История диалога очищена ✅");
+        ctx.waitUntil(botReply(env, chatId, "История диалога очищена ✅"));
         return json({ ok: true });
       }
 
-      // Показать "печатает..."
-      await b24(env, "im.dialog.writing", { DIALOG_ID: chatId }).catch(() => {});
+      // Тяжёлая AI-логика выполняется в фоне — воркер сразу возвращает 200 OK Bitrix24,
+      // исключая таймаут вебхука (ошибка 1102 Cloudflare)
+      ctx.waitUntil((async () => {
+        try {
+          // Показать "печатает..."
+          await b24(env, "im.dialog.writing", { DIALOG_ID: chatId }).catch(() => {});
 
-      // Получить историю, спросить Gemini, сохранить историю
-      try {
-        const history = await getHistory(env, userId);
+          const history = await getHistory(env, userId);
 
-        // Добавить контекст в первый запрос сессии
-        const contextMsg = history.length === 0
-          ? `[Контекст: пользователь B24 ID=${userId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
-          : message;
+          // Добавить контекст в первый запрос сессии
+          const contextMsg = history.length === 0
+            ? `[Контекст: пользователь B24 ID=${userId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
+            : message;
 
-        const { text, history: newHistory } = await askGemini(env, history, contextMsg);
-        await saveHistory(env, userId, newHistory);
-        await botReply(env, chatId, text);
-      } catch (e) {
-        await botReply(env, chatId, `⚠️ Ошибка: ${e.message}`);
-      }
+          const { text, history: newHistory } = await askGemini(env, history, contextMsg);
+          await saveHistory(env, userId, newHistory);
+          await botReply(env, chatId, text);
+        } catch (e) {
+          await botReply(env, chatId, `⚠️ Ошибка: ${e.message}`);
+        }
+      })());
 
       return json({ ok: true });
     }
