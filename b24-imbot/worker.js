@@ -231,6 +231,10 @@ async function b24(env, method, params = {}) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    throw new Error(`B24 ${method}: HTTP ${r.status} — ${text.slice(0, 200)}`);
+  }
   const d = await r.json();
   if (d.error)
     throw new Error(`B24 ${method}: ${d.error} — ${d.error_description || ""}`);
@@ -653,7 +657,9 @@ async function executeTool(env, name, args) {
               .bind(ftsQuery)
               .all();
             results = fts.results || [];
-          } catch {}
+          } catch (e) {
+            console.error("FTS search_knowledge error:", e);
+          }
         }
         if (!results.length) {
           const q = `%${args.query}%`;
@@ -747,7 +753,8 @@ async function executeTool(env, name, args) {
         return JSON.stringify({ error: "Unknown tool: " + name });
     }
   } catch (e) {
-    return JSON.stringify({ error: e.message });
+    console.error(`executeTool ${name} error:`, e);
+    return JSON.stringify({ error: `${name}: ${e.message}` });
   }
 }
 
@@ -780,6 +787,10 @@ async function askGemini(env, history, userText) {
       }),
     });
 
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`Gemini: HTTP ${r.status} — ${text.slice(0, 200)}`);
+    }
     const data = await r.json();
     if (data.error) throw new Error(`Gemini: ${data.error.message}`);
 
@@ -846,7 +857,8 @@ async function getHistory(env, userId, dialogId) {
     const key = `history:${safeUser}:${safeDialog}`;
     const raw = await env.CHAT_HISTORY.get(key);
     return raw ? JSON.parse(raw) : [];
-  } catch {
+  } catch (e) {
+    console.error("getHistory error:", e);
     return [];
   }
 }
@@ -860,7 +872,9 @@ async function saveHistory(env, userId, dialogId, history) {
     await env.CHAT_HISTORY.put(key, JSON.stringify(history), {
       expirationTtl: 60 * 60 * 24, // 24 часа
     });
-  } catch {}
+  } catch (e) {
+    console.error("saveHistory error:", e);
+  }
 }
 
 // ── Регистрация бота ─────────────────────────────────────
@@ -930,6 +944,7 @@ export default {
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
         const csvResp = await fetch(downloadUrl);
+        if (!csvResp.ok) throw new Error(`Failed to download file: HTTP ${csvResp.status}`);
         const csvText = await csvResp.text();
 
         // Парсим CSV (разделитель ;, UTF-8 BOM)
@@ -983,44 +998,66 @@ export default {
 
     // Bulk-импорт документов: POST /import-doc-bulk {secret, docs:[{title,content,tags}]}
     if (url.pathname === "/import-doc-bulk" && request.method === "POST") {
-      const body = await request.json();
+      let body;
+      try {
+        body = await request.json();
+      } catch (e) {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
       if (body.secret !== env.IMPORT_SECRET)
         return json({ error: "Forbidden" }, 403);
       const docs = body.docs || [];
       let inserted = 0;
+      const errors = [];
       for (const doc of docs) {
         const { title, content, tags = "" } = doc;
         if (!title || !content) continue;
-        await upsertKnowledgeDocument(env, {
-          title,
-          content,
-          tags,
-          sourceType: "manual_bulk",
-        });
-        inserted++;
+        try {
+          await upsertKnowledgeDocument(env, {
+            title,
+            content,
+            tags,
+            sourceType: "manual_bulk",
+          });
+          inserted++;
+        } catch (e) {
+          console.error(`import-doc-bulk item error (${title}):`, e);
+          errors.push({ title, error: e.message });
+        }
       }
-      return json({ ok: true, inserted });
+      return json({ ok: true, inserted, errors });
     }
 
     // Bulk-импорт брендов: POST /import-brands-bulk {secret, brands:[{name,description,logo_url,search_url}]}
     if (url.pathname === "/import-brands-bulk" && request.method === "POST") {
-      const body = await request.json();
+      let body;
+      try {
+        body = await request.json();
+      } catch (e) {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
       if (body.secret !== env.IMPORT_SECRET)
         return json({ error: "Forbidden" }, 403);
       let inserted = 0;
+      const errors = [];
       for (const b of body.brands || []) {
         const { name, description = "", logo_url = "", search_url = "" } = b;
         if (!name) continue;
-        await env.CATALOG.prepare(
-          `INSERT INTO brands (name,description,logo_url,search_url) VALUES (?,?,?,?)
-           ON CONFLICT(name) DO UPDATE SET description=excluded.description,
-           logo_url=excluded.logo_url, search_url=excluded.search_url`,
-        )
-          .bind(name, description, logo_url, search_url)
-          .run();
-        inserted++;
+        try {
+          await env.CATALOG.prepare(
+            `INSERT INTO brands (name,description,logo_url,search_url) VALUES (?,?,?,?)
+             ON CONFLICT(name) DO UPDATE SET description=excluded.description,
+             logo_url=excluded.logo_url, search_url=excluded.search_url`,
+          )
+            .bind(name, description, logo_url, search_url)
+            .run();
+          inserted++;
+        } catch (e) {
+          console.error(`import-brands-bulk item error (${name}):`, e);
+          errors.push({ name, error: e.message });
+        }
       }
-      return json({ ok: true, inserted });
+      return json({ ok: true, inserted, errors });
     }
 
     // Импорт MD-документа в базу знаний из Bitrix24 Disk
@@ -1044,7 +1081,9 @@ export default {
           (meta
             ? meta.NAME.replace(/_/g, " ").replace(/\.md$/i, "")
             : "Документ");
-        const content = await (await fetch(downloadUrl)).text();
+        const resp = await fetch(downloadUrl);
+        if (!resp.ok) throw new Error(`Failed to download file: HTTP ${resp.status}`);
+        const content = await resp.text();
         await upsertKnowledgeDocument(env, {
           title,
           content,
@@ -1073,7 +1112,9 @@ export default {
         const downloadUrl =
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
-        const text = await (await fetch(downloadUrl)).text();
+        const csvResp2 = await fetch(downloadUrl);
+        if (!csvResp2.ok) throw new Error(`Failed to download file: HTTP ${csvResp2.status}`);
+        const text = await csvResp2.text();
         const lines = text
           .replace(/^\uFEFF/, "")
           .split("\n")
@@ -1420,14 +1461,16 @@ export default {
       }
       const fileId = url.searchParams.get("file_id");
       const directUrl = url.searchParams.get("url");
-      const n = parseInt(url.searchParams.get("lines") || "10");
+      const n = Math.max(1, Math.min(1000, parseInt(url.searchParams.get("lines")) || 10));
       if (!fileId && !directUrl)
         return json({ error: "file_id or url required" }, 400);
       try {
         const downloadUrl =
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
-        const text = await (await fetch(downloadUrl)).text();
+        const previewResp = await fetch(downloadUrl);
+        if (!previewResp.ok) throw new Error(`Failed to download file: HTTP ${previewResp.status}`);
+        const text = await previewResp.text();
         const lines = text
           .replace(/^\uFEFF/, "")
           .split("\n")
@@ -1453,7 +1496,9 @@ export default {
         const downloadUrl =
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
-        const text = await (await fetch(downloadUrl)).text();
+        const analogsResp = await fetch(downloadUrl);
+        if (!analogsResp.ok) throw new Error(`Failed to download file: HTTP ${analogsResp.status}`);
+        const text = await analogsResp.text();
         const lines = text
           .replace(/^\uFEFF/, "")
           .split("\n")
@@ -1544,7 +1589,9 @@ export default {
             select: ["id", "iblockId", "name", "siteId"],
           });
           tradeCatalogs = tc?.catalogs ?? tc ?? [];
-        } catch {}
+        } catch (e) {
+          console.error("discover-catalog trade catalogs error:", e);
+        }
         return json({
           crm_catalogs: crmCatalogs,
           trade_catalogs: tradeCatalogs,
@@ -1557,7 +1604,12 @@ export default {
 
     // Сброс истории диалога
     if (url.pathname === "/reset" && request.method === "POST") {
-      const body = await request.json();
+      let body;
+      try {
+        body = await request.json();
+      } catch (e) {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
       const safeUser = sanitizeId(body.user_id);
       const safeDialog = sanitizeId(body.dialog_id);
       if (!safeUser) return json({ error: "Invalid user_id" }, 400);
@@ -1670,7 +1722,7 @@ export default {
           try {
             // Показать "печатает..."
             await b24(env, "im.dialog.writing", { DIALOG_ID: chatId }).catch(
-              () => {},
+              (e) => console.error("im.dialog.writing error:", e),
             );
 
             const history = await getHistory(env, userId, chatId);

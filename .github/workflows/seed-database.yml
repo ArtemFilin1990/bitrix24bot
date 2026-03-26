@@ -96,7 +96,7 @@ jobs:
             | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['subdomain'])")
           WORKER_URL="https://bitrix24bot.${SUBDOMAIN}.workers.dev"
           echo "Registering bot at ${WORKER_URL}/register"
-          RESULT=$(curl -sf "${WORKER_URL}/register" || echo '{"error":"curl failed"}')
+          RESULT=$(curl -sf "${WORKER_URL}/register?secret=${IMPORT_SECRET}" || echo '{"error":"curl failed"}')
           echo "Result: $RESULT"
           echo "$RESULT" | python3 -c "
 import sys,json
@@ -110,3 +110,4 @@ elif 'error' in d:
         env:
           CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          IMPORT_SECRET: ${{ secrets.IMPORT_SECRET }}
