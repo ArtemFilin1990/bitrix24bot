@@ -826,31 +826,38 @@ async function askGemini(env, history, userText) {
 }
 
 // ── KV: история диалогов ─────────────────────────────────
-// Использует Cloudflare KV для хранения истории по user_id
+// Использует Cloudflare KV для хранения истории по userId + dialogId
 // Привязать KV namespace "CHAT_HISTORY" в wrangler.toml
 
-// Bitrix24 user IDs are always positive integers
-function sanitizeUserId(userId) {
-  if (!userId || !/^\d+$/.test(String(userId))) return null;
-  return String(userId);
+// Bitrix24 user IDs and dialog IDs are always positive integers or "chatXXX"
+function sanitizeId(id) {
+  if (!id) return null;
+  const str = String(id);
+  // Разрешаем числа или "chat123"
+  if (/^(\d+|chat\d+)$/.test(str)) return str;
+  return null;
 }
 
-async function getHistory(env, userId) {
+async function getHistory(env, userId, dialogId) {
   try {
-    const safe = sanitizeUserId(userId);
-    if (!safe) return [];
-    const raw = await env.CHAT_HISTORY.get(`history:${safe}`);
+    const safeUser = sanitizeId(userId);
+    const safeDialog = sanitizeId(dialogId);
+    if (!safeUser || !safeDialog) return [];
+    const key = `history:${safeUser}:${safeDialog}`;
+    const raw = await env.CHAT_HISTORY.get(key);
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
   }
 }
 
-async function saveHistory(env, userId, history) {
+async function saveHistory(env, userId, dialogId, history) {
   try {
-    const safe = sanitizeUserId(userId);
-    if (!safe) return;
-    await env.CHAT_HISTORY.put(`history:${safe}`, JSON.stringify(history), {
+    const safeUser = sanitizeId(userId);
+    const safeDialog = sanitizeId(dialogId);
+    if (!safeUser || !safeDialog) return;
+    const key = `history:${safeUser}:${safeDialog}`;
+    await env.CHAT_HISTORY.put(key, JSON.stringify(history), {
       expirationTtl: 60 * 60 * 24, // 24 часа
     });
   } catch {}
@@ -1544,9 +1551,18 @@ export default {
     // Сброс истории диалога
     if (url.pathname === "/reset" && request.method === "POST") {
       const body = await request.json();
-      const safe = sanitizeUserId(body.user_id);
-      if (!safe) return json({ error: "Invalid user_id" }, 400);
-      await env.CHAT_HISTORY.delete(`history:${safe}`);
+      const safeUser = sanitizeId(body.user_id);
+      const safeDialog = sanitizeId(body.dialog_id);
+      if (!safeUser) return json({ error: "Invalid user_id" }, 400);
+
+      // Если не указан dialog_id, удалить все истории пользователя (опасно, не рекомендуется)
+      if (safeDialog) {
+        await env.CHAT_HISTORY.delete(`history:${safeUser}:${safeDialog}`);
+      } else {
+        // Fallback для обратной совместимости — но это НЕ удалит все диалоги
+        // В KV нет wildcard delete, нужен list+delete
+        return json({ error: "dialog_id required for safety" }, 400);
+      }
       return json({ ok: true });
     }
 
@@ -1631,8 +1647,11 @@ export default {
       }
 
       if (message === "/сброс" || message === "/reset") {
-        const safe = sanitizeUserId(userId);
-        if (safe) await env.CHAT_HISTORY.delete(`history:${safe}`);
+        const safeUser = sanitizeId(userId);
+        const safeDialog = sanitizeId(chatId);
+        if (safeUser && safeDialog) {
+          await env.CHAT_HISTORY.delete(`history:${safeUser}:${safeDialog}`);
+        }
         ctx.waitUntil(botReply(env, chatId, "История диалога очищена ✅"));
         return json({ ok: true });
       }
@@ -1647,12 +1666,12 @@ export default {
               () => {},
             );
 
-            const history = await getHistory(env, userId);
+            const history = await getHistory(env, userId, chatId);
 
             // Добавить контекст в первый запрос сессии
             const contextMsg =
               history.length === 0
-                ? `[Контекст: пользователь B24 ID=${userId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
+                ? `[Контекст: пользователь B24 ID=${userId}, диалог=${chatId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
                 : message;
 
             const { text, history: newHistory } = await askGemini(
@@ -1660,10 +1679,16 @@ export default {
               history,
               contextMsg,
             );
-            await saveHistory(env, userId, newHistory);
+            await saveHistory(env, userId, chatId, newHistory);
             await botReply(env, chatId, text);
           } catch (e) {
-            await botReply(env, chatId, `⚠️ Ошибка: ${e.message}`);
+            // Не показывать сырые внутренние ошибки пользователю
+            console.error("Error in bot logic:", e);
+            const safeMessage =
+              e.message.includes("Gemini") || e.message.includes("B24")
+                ? "⚠️ Временная ошибка связи с сервисом. Попробуйте через минуту."
+                : "⚠️ Произошла ошибка при обработке запроса. Обратитесь к администратору.";
+            await botReply(env, chatId, safeMessage);
           }
         })(),
       );
