@@ -1025,7 +1025,7 @@ export default {
           errors.push({ title, error: e.message });
         }
       }
-      return json({ ok: true, inserted, errors: errors.length ? errors : undefined });
+      return json({ ok: true, inserted, errors });
     }
 
     // Bulk-импорт брендов: POST /import-brands-bulk {secret, brands:[{name,description,logo_url,search_url}]}
@@ -1057,7 +1057,7 @@ export default {
           errors.push({ name, error: e.message });
         }
       }
-      return json({ ok: true, inserted, errors: errors.length ? errors : undefined });
+      return json({ ok: true, inserted, errors });
     }
 
     // Импорт MD-документа в базу знаний из Bitrix24 Disk
@@ -1461,7 +1461,7 @@ export default {
       }
       const fileId = url.searchParams.get("file_id");
       const directUrl = url.searchParams.get("url");
-      const n = Math.max(1, Math.min(1000, parseInt(url.searchParams.get("lines") || "10") || 10));
+      const n = Math.max(1, Math.min(1000, parseInt(url.searchParams.get("lines")) || 10));
       if (!fileId && !directUrl)
         return json({ error: "file_id or url required" }, 400);
       try {
