@@ -3,8 +3,8 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
-BOT_ID    = "1267"
-CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
+BOT_ID    = ""                                    # заполнится после GET /register
+CLIENT_ID = "local.6987a5f98a7d63.30547652"
 
 # KV для хранения истории диалогов
 [[kv_namespaces]]
