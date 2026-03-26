@@ -897,7 +897,11 @@ export default {
     const url = new URL(request.url);
 
     // Регистрация бота (вызвать один раз вручную)
+    // GET /register?secret=<IMPORT_SECRET>
     if (url.pathname === "/register" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
       try {
         const result = await registerBot(env);
         return json({
@@ -951,6 +955,7 @@ export default {
         }
 
         // Очищаем и вставляем батчами по 100
+        if (!rows.length) return json({ error: "No valid rows parsed from CSV" }, 400);
         await env.CATALOG.prepare("DELETE FROM bearings").run();
         let inserted = 0;
         const BATCH = 20;
@@ -1152,6 +1157,7 @@ export default {
         const getNum = (cols, idx, row) =>
           parseFloat(get(cols, idx, row).replace(",", ".")) || null;
 
+        if (lines.length <= 1) return json({ error: "No data rows found in CSV" }, 400);
         await env.CATALOG.prepare("DELETE FROM catalog").run();
         const BATCH = 10;
         let inserted = 0;
@@ -1493,6 +1499,7 @@ export default {
             rows.push({ brand, desig, aDesig, aBrand, factory });
         }
 
+        if (!rows.length) return json({ error: "No valid rows parsed from CSV" }, 400);
         await env.CATALOG.prepare("DELETE FROM analogs").run();
         const BATCH = 20;
         let inserted = 0;
