@@ -1,4 +1,5 @@
 *.sh
+!run-bot.sh
 .wrangler/
 __pycache__/
 *.pyc
