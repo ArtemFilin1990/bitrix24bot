@@ -794,7 +794,21 @@ async function askGemini(env, history, userText) {
     const data = await r.json();
     if (data.error) throw new Error(`Gemini: ${data.error.message}`);
 
-    const parts = data.candidates?.[0]?.content?.parts ?? [];
+    // Обработка заблокированных ответов (safety filters)
+    const candidate = data.candidates?.[0];
+    if (!candidate?.content?.parts?.length) {
+      const blockReason =
+        candidate?.finishReason ||
+        data.promptFeedback?.blockReason ||
+        "UNKNOWN";
+      console.error("Gemini: empty response, reason:", blockReason);
+      return {
+        text: "Не удалось получить ответ от ИИ. Попробуйте переформулировать вопрос.",
+        history: contents.slice(-20),
+      };
+    }
+
+    const parts = candidate.content.parts;
     contents.push({ role: "model", parts });
 
     const fnCalls = parts.filter((p) => p.functionCall);
@@ -820,17 +834,22 @@ async function askGemini(env, history, userText) {
             p.functionCall.args,
           );
         } catch (err) {
-          resultStr = JSON.stringify({ error: err.message });
+          resultStr = JSON.stringify({ error: err?.message || String(err) });
         }
-        return {
+        const fnResp = {
           functionResponse: {
             name: p.functionCall.name,
             response: { result: resultStr },
           },
         };
+        // Gemini 2.5+ использует id для связи вызова и результата
+        if (p.functionCall.id) {
+          fnResp.functionResponse.id = p.functionCall.id;
+        }
+        return fnResp;
       }),
     );
-    contents.push({ role: "user", parts: fnResults });
+    contents.push({ role: "function", parts: fnResults });
   }
 
   return { text: "Превышен лимит итераций.", history: contents.slice(-20) };
@@ -856,7 +875,19 @@ async function getHistory(env, userId, dialogId) {
     if (!safeUser || !safeDialog) return [];
     const key = `history:${safeUser}:${safeDialog}`;
     const raw = await env.CHAT_HISTORY.get(key);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const history = JSON.parse(raw);
+    // Миграция: заменяем role:"user" на role:"function" для functionResponse
+    for (const entry of history) {
+      if (
+        entry.role === "user" &&
+        entry.parts?.length &&
+        entry.parts.every((p) => p.functionResponse)
+      ) {
+        entry.role = "function";
+      }
+    }
+    return history;
   } catch (e) {
     console.error("getHistory error:", e);
     return [];
@@ -1625,6 +1656,31 @@ export default {
       return json({ ok: true });
     }
 
+    // Диагностика конфигурации (не раскрывает значения секретов)
+    if (url.pathname === "/status" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const check = (v) => (v ? "✅" : "❌ missing");
+      return json({
+        ok: true,
+        config: {
+          BOT_ID: check(env.BOT_ID),
+          CLIENT_ID: check(env.CLIENT_ID),
+          GEMINI_API_KEY: check(env.GEMINI_API_KEY),
+          GEMINI_MODEL: env.GEMINI_MODEL || "gemini-2.5-flash (default)",
+          B24_PORTAL: check(env.B24_PORTAL),
+          B24_USER_ID: check(env.B24_USER_ID),
+          B24_TOKEN: check(env.B24_TOKEN),
+          B24_APP_TOKEN: check(env.B24_APP_TOKEN),
+          WORKER_HOST: check(env.WORKER_HOST),
+          IMPORT_SECRET: check(env.IMPORT_SECRET),
+          CHAT_HISTORY_KV: check(env.CHAT_HISTORY),
+          CATALOG_D1: check(env.CATALOG),
+        },
+      });
+    }
+
     // Основной обработчик событий от Bitrix24
     if (url.pathname === "/imbot" && request.method === "POST") {
       const body = await request.text();
@@ -1633,6 +1689,7 @@ export default {
       // Валидация токена приложения (защита от неавторизованных запросов)
       const appToken = data["auth[application_token]"];
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
+        console.error("Webhook rejected: invalid app token");
         return json({ error: "Forbidden: Invalid application token" }, 403);
       }
 
@@ -1644,6 +1701,7 @@ export default {
 
       // Обработать только входящие сообщения боту
       if (event !== "ONIMBOTMESSAGEADD" || !message || !userId || !chatId) {
+        console.log("Webhook skipped:", { event, hasMessage: !!message, userId, chatId });
         return json({ ok: true });
       }
 
@@ -1743,8 +1801,9 @@ export default {
           } catch (e) {
             // Не показывать сырые внутренние ошибки пользователю
             console.error("Error in bot logic:", e);
+            const errMsg = e?.message || String(e);
             const safeMessage =
-              e.message.includes("Gemini") || e.message.includes("B24")
+              errMsg.includes("Gemini") || errMsg.includes("B24")
                 ? "⚠️ Временная ошибка связи с сервисом. Попробуйте через минуту."
                 : "⚠️ Произошла ошибка при обработке запроса. Обратитесь к администратору.";
             await botReply(env, chatId, safeMessage).catch((err) =>
