@@ -380,6 +380,220 @@ class ProcessInboxTests(unittest.TestCase):
             cur = conn.cursor()
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM kb_documents").fetchone()[0], 0)
 
+    # ── CSV edge cases ────────────────────────────────────────────────────────
+
+    def test_catalog_csv_with_utf8_bom(self):
+        """Catalog CSVs with a UTF-8 BOM must parse the header correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "catalog").mkdir(parents=True)
+            csv_file = inbox / "catalog" / "bom.csv"
+            # Write file with an explicit leading BOM
+            bom_text = "\ufeffid;Обозначение\nnu205;NU205\n"
+            csv_file.write_bytes(bom_text.encode("utf-8"))
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT item_id FROM catalog WHERE item_id = 'nu205'"
+            ).fetchone()
+            self.assertIsNotNone(row, "BOM caused item_id column to be misread")
+
+    def test_catalog_header_only_csv_imports_no_rows(self):
+        """A CSV that contains only a header row must import zero catalog rows."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "catalog").mkdir(parents=True)
+            csv_file = inbox / "catalog" / "empty.csv"
+            csv_file.write_text("id;Обозначение;Производитель\n", encoding="utf-8")
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            self.assertEqual(
+                cur.execute("SELECT COUNT(*) FROM catalog").fetchone()[0], 0
+            )
+
+    def test_catalog_stock_flag_truthy_and_falsy_values(self):
+        """stock_flag must be 1 for '1','да','yes','true' and 0 for everything else."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "catalog").mkdir(parents=True)
+            csv_file = inbox / "catalog" / "stock.csv"
+            csv_file.write_text(
+                "id;Обозначение;Наличие\n"
+                "s1;S1;1\n"
+                "s2;S2;да\n"
+                "s3;S3;yes\n"
+                "s4;S4;true\n"
+                "s5;S5;0\n"
+                "s6;S6;нет\n"
+                "s7;S7;no\n"
+                "s8;S8;false\n"
+                "s9;S9;\n",
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            in_stock = {
+                r[0]
+                for r in cur.execute(
+                    "SELECT item_id FROM catalog WHERE stock_flag = 1"
+                ).fetchall()
+            }
+            out_stock = {
+                r[0]
+                for r in cur.execute(
+                    "SELECT item_id FROM catalog WHERE stock_flag = 0"
+                ).fetchall()
+            }
+            self.assertSetEqual(in_stock, {"s1", "s2", "s3", "s4"})
+            self.assertSetEqual(out_stock, {"s5", "s6", "s7", "s8", "s9"})
+
+    def test_catalog_whitespace_only_rows_skipped(self):
+        """Rows that are all whitespace or empty must not create catalog entries."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "catalog").mkdir(parents=True)
+            csv_file = inbox / "catalog" / "ws.csv"
+            csv_file.write_text(
+                "id;Обозначение\n"
+                "6205;6205\n"
+                "  ;  \n"
+                "   \n"
+                "6305;6305\n",
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            self.assertEqual(
+                cur.execute("SELECT COUNT(*) FROM catalog").fetchone()[0], 2
+            )
+
+    def test_catalog_comma_decimal_in_dimensions(self):
+        """Dimension values written with a comma decimal separator must parse correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "catalog").mkdir(parents=True)
+            csv_file = inbox / "catalog" / "comma_dims.csv"
+            csv_file.write_text(
+                "id;Обозначение;Внутр.диаметр;Наруж.диаметр;Ширина;Масса_кг\n"
+                "abc;ABC;25;52;15;0,128\n",
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT d_mm, mass_kg FROM catalog WHERE item_id = 'abc'"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertAlmostEqual(row[0], 25.0)
+            self.assertAlmostEqual(row[1], 0.128)
+
+    def test_analogs_empty_csv_imports_no_rows(self):
+        """An analogs CSV with only a header must import zero analog rows."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "analogs").mkdir(parents=True)
+            csv_file = inbox / "analogs" / "empty.csv"
+            csv_file.write_text(
+                "brand;designation;analog_designation;analog_brand\n",
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            self.assertEqual(
+                cur.execute("SELECT COUNT(*) FROM analogs").fetchone()[0], 0
+            )
+
+    def test_analogs_rows_missing_both_designations_skipped(self):
+        """Rows where BOTH designation and analog_designation are empty must be skipped.
+
+        The guard condition in process_analogs is:
+          if not desig and not adesig: continue
+        So a row is imported as long as at least one of the two fields is non-empty.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "analogs").mkdir(parents=True)
+            csv_file = inbox / "analogs" / "partial.csv"
+            csv_file.write_text(
+                "brand;designation;analog_designation;analog_brand\n"
+                "ГОСТ;6205;180205;ISO\n"  # both present — imported
+                "ГОСТ;;;\n"               # both empty — skipped
+                "ISO;;6205;ГОСТ\n",       # only analog_designation present — imported
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            # Row 1 and row 3 are imported; row 2 (both empty) is skipped
+            self.assertEqual(
+                cur.execute("SELECT COUNT(*) FROM analogs").fetchone()[0], 2
+            )
+
+    def test_brands_empty_csv_imports_no_rows(self):
+        """A brands CSV with only a header must import zero brand rows."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "brands").mkdir(parents=True)
+            csv_file = inbox / "brands" / "empty.csv"
+            csv_file.write_text("name;description;logo_url;search_url\n", encoding="utf-8")
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            self.assertEqual(
+                cur.execute("SELECT COUNT(*) FROM brands").fetchone()[0], 0
+            )
+
+    def test_doc_without_frontmatter_uses_h1_as_title(self):
+        """A Markdown doc without frontmatter must infer its title from the H1 heading."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "docs").mkdir(parents=True)
+            md_file = inbox / "docs" / "no-fm.md"
+            md_file.write_text("# Заголовок из H1\n\nТекст статьи.\n", encoding="utf-8")
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT title FROM kb_documents WHERE slug = 'no-fm'"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "Заголовок из H1")
+
+    def test_doc_type_from_frontmatter_sets_is_canonical(self):
+        """Docs with type != 'article' in frontmatter must have is_canonical = 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "docs").mkdir(parents=True)
+            md_file = inbox / "docs" / "prompt-doc.md"
+            md_file.write_text(
+                "---\ntitle: Test Prompt\ntype: prompt\n---\nContent.\n",
+                encoding="utf-8",
+            )
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT is_canonical FROM kb_documents WHERE slug = 'prompt-doc'"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
