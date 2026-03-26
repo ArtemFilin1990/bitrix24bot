@@ -834,7 +834,7 @@ async function askGemini(env, history, userText) {
             p.functionCall.args,
           );
         } catch (err) {
-          resultStr = JSON.stringify({ error: err.message });
+          resultStr = JSON.stringify({ error: err?.message || String(err) });
         }
         const fnResp = {
           functionResponse: {
@@ -1672,7 +1672,7 @@ export default {
           B24_PORTAL: check(env.B24_PORTAL),
           B24_USER_ID: check(env.B24_USER_ID),
           B24_TOKEN: check(env.B24_TOKEN),
-          B24_APP_TOKEN: env.B24_APP_TOKEN ? "✅ (validation enabled)" : "⚠️ not set (validation disabled)",
+          B24_APP_TOKEN: check(env.B24_APP_TOKEN),
           WORKER_HOST: check(env.WORKER_HOST),
           IMPORT_SECRET: check(env.IMPORT_SECRET),
           CHAT_HISTORY_KV: check(env.CHAT_HISTORY),
