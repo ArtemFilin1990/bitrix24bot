@@ -872,7 +872,7 @@ async function registerBot(env) {
     TYPE: "B", // Bot
     EVENT_HANDLER: `${workerUrl}/imbot`,
     OPENLINE: "N",
-    CLIENT_ID: "everest_ai_bot",
+    CLIENT_ID: env.CLIENT_ID,
     PROPERTIES: {
       NAME: "ИИ-помощник Эверест",
       COLOR: "AQUA",
@@ -1591,7 +1591,7 @@ export default {
       const message = data["data[PARAMS][MESSAGE]"]?.trim();
 
       // Обработать только входящие сообщения боту
-      if (event !== "ONIMBOTMESSAGEADD" || !message || !userId) {
+      if (event !== "ONIMBOTMESSAGEADD" || !message || !userId || !chatId) {
         return json({ ok: true });
       }
 
@@ -1695,7 +1695,9 @@ export default {
               e.message.includes("Gemini") || e.message.includes("B24")
                 ? "⚠️ Временная ошибка связи с сервисом. Попробуйте через минуту."
                 : "⚠️ Произошла ошибка при обработке запроса. Обратитесь к администратору.";
-            await botReply(env, chatId, safeMessage);
+            await botReply(env, chatId, safeMessage).catch((err) =>
+              console.error("Error sending error reply:", err),
+            );
           }
         })(),
       );
