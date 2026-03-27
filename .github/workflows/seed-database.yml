@@ -42,9 +42,9 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler@4.76.0
 
-      - name: Apply schema
+      - name: Apply schema migrations
         if: ${{ github.event.inputs.apply_schema == 'true' }}
-        run: wrangler d1 execute bearings-catalog --file schema.sql --remote
+        run: wrangler d1 migrations apply bearings-catalog --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
