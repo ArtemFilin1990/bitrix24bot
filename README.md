@@ -85,7 +85,7 @@ wrangler d1 execute bearings-catalog --file schema.sql --remote
 python3 -m unittest discover tests/ -v
 
 # JavaScript тесты (worker)
-npm run test:worker
+npm test
 ```
 
 ## 📝 Лицензия

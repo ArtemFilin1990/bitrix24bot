@@ -52,9 +52,24 @@ function makeEnv(overrides = {}) {
     GEMINI_API_KEY:     'test-gemini-key',
     IMPORT_SECRET:      'test-secret',
     BOT_ID:             '999',
+    CLIENT_ID:          'test-client-id',
     WORKER_HOST:        'test.example.com',
     BITRIX_WEBHOOK_URL: 'https://b24.example.com/rest/1/token/',
     ...overrides,
+  };
+}
+
+/**
+ * Create a mock Cloudflare Workers execution context.
+ * waitUntil collects promises so tests can flush them with _flush().
+ */
+function makeCtx() {
+  const promises = [];
+  return {
+    waitUntil: (promise) => { promises.push(Promise.resolve(promise).catch(() => {})); },
+    passThroughOnException: () => {},
+    /** Await all background tasks enqueued via waitUntil. */
+    _flush: () => Promise.all(promises),
   };
 }
 
@@ -276,6 +291,7 @@ describe('Group chat keyword filtering', () => {
     vi.stubGlobal('fetch', mockFetch);
 
     try {
+      const ctx = makeCtx();
       const res = await worker.fetch(
         makeImbotRequest({
           event:                     'ONIMBOTMESSAGEADD',
@@ -284,7 +300,9 @@ describe('Group chat keyword filtering', () => {
           'data[PARAMS][MESSAGE]':   message,
         }),
         makeEnv(),
+        ctx,
       );
+      await ctx._flush();
       expect(res.status).toBe(200);
       // At least one call to the Gemini API must have been made
       const geminiCalls = mockFetch.mock.calls.filter(([url]) =>
@@ -301,6 +319,7 @@ describe('Group chat keyword filtering', () => {
     vi.stubGlobal('fetch', mockFetch);
 
     try {
+      const ctx = makeCtx();
       const res = await worker.fetch(
         makeImbotRequest({
           event:                     'ONIMBOTMESSAGEADD',
@@ -309,7 +328,9 @@ describe('Group chat keyword filtering', () => {
           'data[PARAMS][MESSAGE]':   '[USER=999] как дела?',  // BOT_ID = 999
         }),
         makeEnv(),
+        ctx,
       );
+      await ctx._flush();
       expect(res.status).toBe(200);
       const geminiCalls = mockFetch.mock.calls.filter(([url]) =>
         String(url).includes('generativelanguage.googleapis.com'),
@@ -337,6 +358,7 @@ describe('Built-in commands in personal chat', () => {
           'data[PARAMS][MESSAGE]':   '/start',
         }),
         makeEnv(),
+        makeCtx(),
       );
       expect(res.status).toBe(200);
       expect((await res.json()).ok).toBe(true);
@@ -354,8 +376,9 @@ describe('Built-in commands in personal chat', () => {
 
     try {
       const kv = makeMockKV();
-      await kv.put('history:42', JSON.stringify([{ role: 'user', parts: [] }]));
+      await kv.put('history:42:42', JSON.stringify([{ role: 'user', parts: [] }]));
 
+      const ctx = makeCtx();
       const res = await worker.fetch(
         makeImbotRequest({
           event:                     'ONIMBOTMESSAGEADD',
@@ -364,11 +387,13 @@ describe('Built-in commands in personal chat', () => {
           'data[PARAMS][MESSAGE]':   '/сброс',
         }),
         makeEnv({ CHAT_HISTORY: kv }),
+        ctx,
       );
+      await ctx._flush();
       expect(res.status).toBe(200);
       expect((await res.json()).ok).toBe(true);
-      // History key must be deleted
-      expect(await kv.get('history:42')).toBeNull();
+      // History key must have been deleted (format: history:{userId}:{dialogId})
+      expect(await kv.get('history:42:42')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
