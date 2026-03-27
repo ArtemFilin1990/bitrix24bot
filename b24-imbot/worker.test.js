@@ -66,10 +66,10 @@ function makeEnv(overrides = {}) {
 function makeCtx() {
   const promises = [];
   return {
-    waitUntil: (promise) => { promises.push(Promise.resolve(promise).catch(() => {})); },
+    waitUntil: (promise) => { promises.push(Promise.resolve(promise)); },
     passThroughOnException: () => {},
     /** Await all background tasks enqueued via waitUntil. */
-    _flush: () => Promise.all(promises),
+    _flush: () => Promise.allSettled(promises),
   };
 }
 
