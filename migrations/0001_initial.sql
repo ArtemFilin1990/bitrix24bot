@@ -1,8 +1,5 @@
--- DEPRECATED (2026-03): This file is kept for reference only.
--- The canonical schema is now maintained as D1 migrations in migrations/.
--- Use `wrangler d1 migrations apply bearings-catalog` to apply schema changes.
---
--- D1 schema for b24-imbot
+-- Migration 0001: Initial D1 schema for b24-imbot (2026-03)
+-- Baseline schema migrated from schema.sql.
 -- Base runtime schema + normalized ingestion tables.
 
 PRAGMA foreign_keys = ON;

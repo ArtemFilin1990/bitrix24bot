@@ -108,7 +108,7 @@ main = "b24-imbot/worker.js"  # ← Entry point is explicitly specified
 compatibility_date = "2024-01-01"
 ```
 
-There's also a local `b24-imbot/wrangler.toml` for development, but production deployments should always run from the repository root.
+There is a single `wrangler.toml` at the repository root for all deployments. Production deployments should always run from the repository root.
 
 ## Troubleshooting
 

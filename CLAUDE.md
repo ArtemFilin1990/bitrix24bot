@@ -21,7 +21,7 @@
 bitrix24bot/
 ├── b24-imbot/
 │   ├── worker.js          # Main Cloudflare Worker — all bot logic lives here (~1,240 lines)
-│   └── wrangler.toml      # Worker-specific Wrangler config (local overrides)
+│   └── worker.test.js     # Vitest tests for the worker
 ├── scripts/
 │   ├── build_bearings_seed.py  # Generate SQL seed from BearingsInfo CSV sources
 │   ├── build_kb_seed.py        # Generate SQL seed from knowledge-base markdown
@@ -39,8 +39,11 @@ bitrix24bot/
 │   ├── analogs/           # Drop CSV files here to import analog mappings
 │   ├── brands/            # Drop CSV files here to import brand metadata
 │   └── docs/              # Drop Markdown files here to import into knowledge base
-├── schema.sql             # D1 database schema (SQLite + FTS5)
-├── wrangler.toml          # Root Wrangler config (production bindings)
+├── schema.sql             # D1 database schema reference (deprecated — use migrations/)
+├── migrations/
+│   └── 0001_initial.sql   # Initial D1 migration (canonical schema source)
+├── requirements.txt       # Python dependencies (pytest for tests)
+├── wrangler.toml          # Wrangler config (single source of truth)
 ├── SITEMAP.md             # Repository navigation guide
 └── .github/workflows/
     ├── deploy.yml         # CI/CD: push to main (non-inbox) → deploy to Cloudflare Workers
@@ -123,9 +126,9 @@ The entire bot logic in one file (~1,240 lines). Major sections:
 | `/discover-catalog` | GET | IMPORT_SECRET | List available Bitrix24 catalog iblock IDs |
 | `/preview-file` | GET | IMPORT_SECRET | Preview first N lines of a Disk file |
 
-### `schema.sql`
+### `schema.sql` / `migrations/`
 
-Canonical D1 schema (238 lines). Key tables:
+Database schema managed via D1 migrations in `migrations/`. `schema.sql` is kept as a reference. Key tables:
 
 | Table | Purpose |
 |---|---|
@@ -223,8 +226,6 @@ Test files:
 ```bash
 # From repo root
 wrangler deploy
-# or
-wrangler deploy --config b24-imbot/wrangler.toml
 ```
 
 Deployment is automated via GitHub Actions on push to `main` (excluding `inbox/` path changes).
@@ -232,8 +233,8 @@ Deployment is automated via GitHub Actions on push to `main` (excluding `inbox/`
 ### Loading Data into D1
 
 ```bash
-# Apply schema
-wrangler d1 execute bearings-catalog --file schema.sql
+# Apply schema via migrations
+wrangler d1 migrations apply bearings-catalog
 
 # Generate and apply bearing seed
 python scripts/build_bearings_seed.py --source-dir ../BearingsInfo --output /tmp/bearings.sql
@@ -326,7 +327,7 @@ Must be done once after initial deployment.
 |---|---|---|
 | `deploy.yml` | Push to `main` (non-`inbox/` paths) or `workflow_dispatch` | Build & deploy Worker via `wrangler deploy` |
 | `process-inbox.yml` | Push to `main` (`inbox/**` paths) or `workflow_dispatch` | Process inbox files → D1; auto-delete + commit `[skip ci]` |
-| `seed-database.yml` | Push to `main` (own file changes) or `workflow_dispatch` | Apply `schema.sql`, clone & seed BearingsInfo + knowledge-base, register bot |
+| `seed-database.yml` | Push to `main` (own file changes) or `workflow_dispatch` | Apply D1 migrations, clone & seed BearingsInfo + knowledge-base, register bot |
 | `check-db.yml` | `workflow_dispatch` only | Query D1 row counts and last ingest audit rows (read-only diagnostic) |
 
 All workflows use `wrangler@4.76.0` and Node.js 24. `deploy.yml` and `seed-database.yml` accept an optional `cf_token` input to override `secrets.CLOUDFLARE_API_TOKEN`.
@@ -369,10 +370,11 @@ Secrets are set via `wrangler secret put <NAME>` — never commit secret values.
 
 ### Modifying the Database Schema
 
-1. Edit `schema.sql` (source of truth).
-2. Write a migration or re-apply full schema to D1: `wrangler d1 execute bearings-catalog --file schema.sql`.
-3. Update any affected queries in `worker.js` and seed scripts.
-4. Update fixtures and tests accordingly.
+1. Create a new migration file in `migrations/` (e.g., `migrations/0002_add_column.sql`).
+2. Apply locally: `wrangler d1 migrations apply bearings-catalog --local`.
+3. Apply to production: `wrangler d1 migrations apply bearings-catalog --remote`.
+4. Update any affected queries in `worker.js` and seed scripts.
+5. Update fixtures and tests accordingly.
 
 ### Adding Knowledge Base Document Types
 

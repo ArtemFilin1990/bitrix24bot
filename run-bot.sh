@@ -58,7 +58,7 @@ update_wrangler_toml() {
 import re, sys
 
 field, value = sys.argv[1], sys.argv[2]
-files = ['wrangler.toml', 'b24-imbot/wrangler.toml']
+files = ['wrangler.toml']
 
 for path in files:
     try:
@@ -246,9 +246,9 @@ deploy_worker() {
 
 # ── Применение схемы базы данных ─────────────────────────
 apply_schema() {
-    log_info "Применение схемы базы данных..."
-    wrangler d1 execute bearings-catalog --file schema.sql --remote
-    log_success "Схема базы данных применена"
+    log_info "Применение миграций базы данных..."
+    wrangler d1 migrations apply bearings-catalog --remote
+    log_success "Миграции базы данных применены"
 }
 
 # ── Загрузка данных о подшипниках ────────────────────────
