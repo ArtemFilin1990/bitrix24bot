@@ -62,7 +62,7 @@ files = ['wrangler.toml', 'b24-imbot/wrangler.toml']
 
 for path in files:
     try:
-        text = open(path).read()
+        text = open(path, encoding='utf-8').read()
     except FileNotFoundError:
         continue
 
@@ -89,7 +89,7 @@ for path in files:
             flags=re.DOTALL,
         )
 
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(text)
 " "$field" "$value"
 }
@@ -175,6 +175,8 @@ setup_resources() {
     else
         if echo "$d1_output" | grep -qi "already exists"; then
             log_warning "D1 база данных bearings-catalog уже существует"
+            log_info "Убедитесь, что database_id в wrangler.toml соответствует существующей базе"
+            log_info "Посмотреть список баз: wrangler d1 list"
         else
             log_error "Ошибка создания D1 базы данных:"
             echo "$d1_output"
@@ -200,6 +202,8 @@ setup_resources() {
     else
         if echo "$kv_output" | grep -qi "already.*exist\|already been taken"; then
             log_warning "KV namespace CHAT_HISTORY уже существует"
+            log_info "Убедитесь, что id в wrangler.toml соответствует существующему namespace"
+            log_info "Посмотреть список: wrangler kv namespace list"
         else
             log_error "Ошибка создания KV namespace:"
             echo "$kv_output"
@@ -236,7 +240,6 @@ setup_resources() {
 # ── Деплой воркера ───────────────────────────────────────
 deploy_worker() {
     log_info "Деплой Worker на Cloudflare..."
-    check_config || exit 1
     wrangler deploy
     log_success "Worker успешно задеплоен"
 }
@@ -314,7 +317,8 @@ register_bot() {
     # Определение IMPORT_SECRET
     if [ -z "$IMPORT_SECRET" ]; then
         echo -n "Введите IMPORT_SECRET: "
-        read -r IMPORT_SECRET
+        read -rs IMPORT_SECRET
+        echo ""
     fi
 
     if [ -z "$IMPORT_SECRET" ]; then
@@ -363,6 +367,7 @@ main() {
             ;;
         deploy)
             log_info "=== ДЕПЛОЙ WORKER ==="
+            check_config || exit 1
             deploy_worker
             ;;
         seed)
