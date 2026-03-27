@@ -2,11 +2,11 @@
 
 ## Project Overview
 
-**bitrix24bot** is a production Bitrix24 IM bot powered by Gemini 2.0 Flash with agentic function-calling. It serves as a bearing/roller bearing consultant ("Alexey from Everest") with deep knowledge of Russian/international bearing catalogs, CRM integration, and a full-text-searchable knowledge base.
+**bitrix24bot** is a production Bitrix24 IM bot powered by Gemini 2.5 Flash with agentic function-calling. It serves as a bearing/roller bearing consultant ("Alexey from Everest") with deep knowledge of Russian/international bearing catalogs, CRM integration, and a full-text-searchable knowledge base.
 
 **Core stack:**
 - **Runtime**: Cloudflare Workers (JavaScript, ES modules)
-- **AI**: Google Gemini 2.0 Flash with function calling
+- **AI**: Google Gemini 2.5 Flash with function calling
 - **Database**: Cloudflare D1 (SQLite) for catalog, knowledge base, analogs, brands
 - **Cache**: Cloudflare KV for 24-hour conversation history
 - **CRM**: Bitrix24 REST API
@@ -79,7 +79,7 @@ External Git repos          inbox/ folder (git-tracked)
                           ▼
                      worker.js  (Cloudflare Worker)
                      ├── POST /imbot   ← Bitrix24 webhook
-                     ├── askGemini()   → Gemini 2.0 Flash API
+                     ├── askGemini()   → Gemini 2.5 Flash API
                      │     └── executeTool()  → D1 queries
                      └── botReply()    → Bitrix24 REST API
 ```

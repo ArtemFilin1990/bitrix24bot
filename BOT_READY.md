@@ -189,7 +189,7 @@ wrangler tail --format pretty
 │                                                     │
 │  ┌──────────────────────────────────────────────┐  │
 │  │ askGemini() - Iterative function calling     │  │
-│  │   ↓ 1. User message → Gemini 2.0 Flash       │  │
+│  │   ↓ 1. User message → Gemini 2.5 Flash       │  │
 │  │   ↓ 2. Gemini → Tool calls (search_catalog)  │  │
 │  │   ↓ 3. executeTool() → D1 queries            │  │
 │  │   ↓ 4. Results → Gemini                      │  │
