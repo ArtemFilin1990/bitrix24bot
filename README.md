@@ -42,11 +42,15 @@ bitrix24bot/
 См. [QUICKSTART.md](./QUICKSTART.md) для пошаговой инструкции по деплою.
 
 ```bash
-# 1. Установите секреты
+# 1. Установите секреты (минимальный набор для работы бота)
 wrangler secret put GEMINI_API_KEY
 wrangler secret put B24_PORTAL
 wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN
+
+# Дополнительные секреты (для импорта данных и регистрации)
+wrangler secret put IMPORT_SECRET
+wrangler secret put WORKER_HOST
 
 # 2. Деплой
 wrangler deploy
