@@ -44,7 +44,7 @@ GitHub → Actions → Seed Database → Run workflow
 
 ## Для локального запуска
 
-### 1. Установка
+### 1. Установка и авторизация
 
 ```bash
 # Установите Wrangler
@@ -52,6 +52,36 @@ npm install -g wrangler@4.76.0
 
 # Авторизуйтесь в Cloudflare
 wrangler login
+```
+
+### 2. Создание ресурсов (автоматически)
+
+Скрипт `setup` создаёт D1 базу данных и KV хранилище, обновляет `wrangler.toml`
+и запрашивает все необходимые секреты:
+
+```bash
+./run-bot.sh setup
+```
+
+Скрипт запросит значения секретов интерактивно:
+- `GEMINI_API_KEY` — ключ из [Google AI Studio](https://makersuite.google.com/)
+- `B24_PORTAL` — URL портала Bitrix24 (например, `company.bitrix24.ru`)
+- `B24_USER_ID` — ID пользователя для REST API
+- `B24_TOKEN` — токен REST API Bitrix24
+- `IMPORT_SECRET` — любая случайная строка для защиты эндпоинтов
+- `WORKER_HOST` — домен воркера (например, `bitrix24bot.xxx.workers.dev`)
+
+<details>
+<summary>Или создание ресурсов вручную</summary>
+
+```bash
+# Создать D1 базу данных
+wrangler d1 create bearings-catalog
+# Скопируйте database_id из вывода в wrangler.toml
+
+# Создать KV namespace
+wrangler kv namespace create "CHAT_HISTORY"
+# Скопируйте id из вывода в wrangler.toml
 
 # Установите секреты
 wrangler secret put GEMINI_API_KEY
@@ -62,22 +92,18 @@ wrangler secret put IMPORT_SECRET
 wrangler secret put WORKER_HOST
 ```
 
-### 2. Создание ресурсов
+</details>
+
+### 3. Проверка конфигурации
 
 ```bash
-# Создать D1 базу данных
-wrangler d1 create bearings-catalog
-# Скопируйте database_id в wrangler.toml
-
-# Создать KV namespace
-wrangler kv:namespace create "CHAT_HISTORY"
-# Скопируйте id в wrangler.toml
+./run-bot.sh check
 ```
 
-### 3. Запуск бота
+### 4. Запуск бота
 
 ```bash
-# Автоматическая установка (всё в одном)
+# Автоматическая установка (деплой + данные + регистрация)
 ./run-bot.sh full
 ```
 
@@ -87,10 +113,10 @@ wrangler kv:namespace create "CHAT_HISTORY"
 # Шаг 1: Деплой Worker
 ./run-bot.sh deploy
 
-# Шаг 2: Загрузка данных
+# Шаг 2: Загрузка данных (схема + каталог + база знаний)
 ./run-bot.sh seed
 
-# Шаг 3: Регистрация бота
+# Шаг 3: Регистрация бота в Bitrix24
 ./run-bot.sh register
 ```
 
@@ -153,10 +179,13 @@ git push origin main
 
 | Команда | Описание |
 |---------|----------|
+| `./run-bot.sh setup` | Создание D1/KV ресурсов и установка секретов |
 | `./run-bot.sh full` | Полная установка (деплой + данные + регистрация) |
 | `./run-bot.sh deploy` | Только деплой Worker |
-| `./run-bot.sh seed` | Только загрузка данных |
-| `./run-bot.sh register` | Только регистрация бота |
+| `./run-bot.sh seed` | Только загрузка данных (схема + каталог + база знаний) |
+| `./run-bot.sh register` | Только регистрация бота в Bitrix24 |
+| `./run-bot.sh check` | Проверка конфигурации wrangler.toml |
+| `./run-bot.sh help` | Справка по командам |
 | `wrangler tail` | Просмотр логов в реальном времени |
 | `wrangler deployments list` | Список деплоев |
 | `wrangler d1 execute bearings-catalog --command "SQL"` | Выполнить SQL запрос |
