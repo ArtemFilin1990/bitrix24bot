@@ -6,6 +6,7 @@
     "deploy:versions": "wrangler versions upload"
   },
   "devDependencies": {
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "wrangler": "^3.0.0"
   }
 }

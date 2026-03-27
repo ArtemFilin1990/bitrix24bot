@@ -151,11 +151,12 @@ def process_doc(path: Path, docs_root: Path, source_repo: str) -> str:
             f"WHERE d.source_path = {sp};"
         )
 
+    tags_str = ' '.join(tags)
     for idx, chunk in enumerate(chunks):
         lines.append(
-            "INSERT INTO kb_chunks (document_id, chunk_no, heading_path, content, tokens_est) "
+            "INSERT INTO kb_chunks (document_id, chunk_no, heading_path, content, tokens_est, title, tags) "
             f"SELECT id, {idx}, {sql_quote(chunk['heading_path'])}, "
-            f"{sql_quote(chunk['content'])}, {chunk['tokens_est']} "
+            f"{sql_quote(chunk['content'])}, {chunk['tokens_est']}, {sql_quote(title)}, {sql_quote(tags_str)} "
             f"FROM kb_documents WHERE source_path = {sp};"
         )
 

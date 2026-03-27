@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS kb_chunks (
   heading_path TEXT,
   content TEXT NOT NULL,
   tokens_est INTEGER,
+  title TEXT DEFAULT '',
+  tags TEXT DEFAULT '',
   FOREIGN KEY(document_id) REFERENCES kb_documents(id) ON DELETE CASCADE,
   UNIQUE(document_id, chunk_no)
 );
@@ -150,7 +152,8 @@ USING fts5(
   heading_path,
   content,
   tags,
-  content=''
+  content='kb_chunks',
+  content_rowid='id'
 );
 
 CREATE TRIGGER IF NOT EXISTS kb_documents_touch_updated_at
@@ -163,13 +166,10 @@ CREATE TRIGGER IF NOT EXISTS kb_chunks_ai AFTER INSERT ON kb_chunks BEGIN
   INSERT INTO kb_chunks_fts(rowid, title, heading_path, content, tags)
   VALUES (
     NEW.id,
-    COALESCE((SELECT title FROM kb_documents WHERE id = NEW.document_id), ''),
+    NEW.title,
     COALESCE(NEW.heading_path, ''),
     NEW.content,
-    COALESCE((SELECT group_concat(t.name, ' ')
-      FROM kb_document_tags dt
-      JOIN kb_tags t ON t.id = dt.tag_id
-      WHERE dt.document_id = NEW.document_id), '')
+    NEW.tags
   );
 END;
 CREATE TRIGGER IF NOT EXISTS kb_chunks_ad AFTER DELETE ON kb_chunks BEGIN
@@ -177,13 +177,10 @@ CREATE TRIGGER IF NOT EXISTS kb_chunks_ad AFTER DELETE ON kb_chunks BEGIN
   VALUES(
     'delete',
     OLD.id,
-    COALESCE((SELECT title FROM kb_documents WHERE id = OLD.document_id), ''),
+    OLD.title,
     COALESCE(OLD.heading_path, ''),
     OLD.content,
-    COALESCE((SELECT group_concat(t.name, ' ')
-      FROM kb_document_tags dt
-      JOIN kb_tags t ON t.id = dt.tag_id
-      WHERE dt.document_id = OLD.document_id), '')
+    OLD.tags
   );
 END;
 CREATE TRIGGER IF NOT EXISTS kb_chunks_au AFTER UPDATE ON kb_chunks BEGIN
@@ -191,24 +188,18 @@ CREATE TRIGGER IF NOT EXISTS kb_chunks_au AFTER UPDATE ON kb_chunks BEGIN
   VALUES(
     'delete',
     OLD.id,
-    COALESCE((SELECT title FROM kb_documents WHERE id = OLD.document_id), ''),
+    OLD.title,
     COALESCE(OLD.heading_path, ''),
     OLD.content,
-    COALESCE((SELECT group_concat(t.name, ' ')
-      FROM kb_document_tags dt
-      JOIN kb_tags t ON t.id = dt.tag_id
-      WHERE dt.document_id = OLD.document_id), '')
+    OLD.tags
   );
   INSERT INTO kb_chunks_fts(rowid, title, heading_path, content, tags)
   VALUES (
     NEW.id,
-    COALESCE((SELECT title FROM kb_documents WHERE id = NEW.document_id), ''),
+    NEW.title,
     COALESCE(NEW.heading_path, ''),
     NEW.content,
-    COALESCE((SELECT group_concat(t.name, ' ')
-      FROM kb_document_tags dt
-      JOIN kb_tags t ON t.id = dt.tag_id
-      WHERE dt.document_id = NEW.document_id), '')
+    NEW.tags
   );
 END;
 

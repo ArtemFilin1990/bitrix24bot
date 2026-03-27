@@ -143,39 +143,39 @@ class BuildBearingsUnitTests(unittest.TestCase):
     def test_build_catalog_skips_brand_with_empty_designation(self):
         rows = [self._row(ISO='6205', GOST='207', SKF='6205')]
         # Only SKF has a designation; FAG/NSK/NTN/KOYO are all empty
-        result = build_catalog(rows)
+        result = list(build_catalog(rows).values())
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].manufacturer, 'SKF')
 
     def test_build_catalog_skips_row_with_no_brands(self):
         rows = [self._row(ISO='6205')]  # all brand columns empty
-        self.assertEqual(build_catalog(rows), [])
+        self.assertEqual(len(build_catalog(rows)), 0)
 
     def test_build_catalog_series_ru_for_long_designation(self):
         rows = [self._row(ISO='6205', SKF='6205')]
-        result = build_catalog(rows)
+        result = list(build_catalog(rows).values())
         self.assertEqual(result[0].series_ru, '62xx')
 
     def test_build_catalog_series_ru_none_for_short_designation(self):
         """Designations shorter than 2 chars must produce series_ru = None."""
         rows = [self._row(ISO='X', SKF='X')]
-        result = build_catalog(rows)
+        result = list(build_catalog(rows).values())
         self.assertIsNone(result[0].series_ru)
 
     def test_build_catalog_iso_ref_and_gost_ref_set(self):
         rows = [self._row(ISO='6205', GOST='207', SKF='6205')]
-        result = build_catalog(rows)
+        result = list(build_catalog(rows).values())
         self.assertEqual(result[0].iso_ref, '6205')
         self.assertEqual(result[0].gost_ref, '207')
 
     def test_build_catalog_iso_ref_none_when_iso_empty(self):
         rows = [self._row(GOST='207', SKF='207')]
-        result = build_catalog(rows)
+        result = list(build_catalog(rows).values())
         self.assertIsNone(result[0].iso_ref)
 
     def test_build_catalog_dimensions_parsed(self):
         rows = [self._row(ISO='6205', SKF='6205', d='25', D='52', B='15', Weight_kg='0.128')]
-        result = build_catalog(rows)
+        result = list(build_catalog(rows).values())
         self.assertEqual(result[0].d_mm, 25.0)
         self.assertEqual(result[0].big_d_mm, 52.0)
         self.assertEqual(result[0].b_mm, 15.0)
@@ -183,7 +183,7 @@ class BuildBearingsUnitTests(unittest.TestCase):
 
     def test_build_catalog_item_id_format(self):
         rows = [self._row(ISO='6205', SKF='6205')]
-        result = build_catalog(rows)
+        result = list(build_catalog(rows).values())
         self.assertEqual(result[0].item_id, 'skf:6205')
 
     # ── build_brands ──────────────────────────────────────────────────────────

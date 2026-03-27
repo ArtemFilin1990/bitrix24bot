@@ -240,10 +240,11 @@ def emit_sql(documents: Iterable[Document], stats: dict, source_snapshot: str) -
             lines.append(
                 f"INSERT OR IGNORE INTO kb_document_tags (document_id, tag_id) SELECT d.id, t.id FROM kb_documents d JOIN kb_tags t ON t.name = {sql_quote(tag)} WHERE d.source_path = {sql_quote(doc.source_path)};"
             )
+        tags_str = ' '.join(doc.tags)
         for idx, chunk in enumerate(doc.chunks):
             lines.append(
-                'INSERT INTO kb_chunks (document_id, chunk_no, heading_path, content, tokens_est) '
-                f"SELECT id, {idx}, {sql_quote(chunk['heading_path'])}, {sql_quote(chunk['content'])}, {chunk['tokens_est']} FROM kb_documents WHERE source_path = {sql_quote(doc.source_path)};"
+                'INSERT INTO kb_chunks (document_id, chunk_no, heading_path, content, tokens_est, title, tags) '
+                f"SELECT id, {idx}, {sql_quote(chunk['heading_path'])}, {sql_quote(chunk['content'])}, {chunk['tokens_est']}, {sql_quote(doc.title)}, {sql_quote(tags_str)} FROM kb_documents WHERE source_path = {sql_quote(doc.source_path)};"
             )
         for target_path, anchor_text in doc.links:
             lines.append(
@@ -257,7 +258,7 @@ def emit_sql(documents: Iterable[Document], stats: dict, source_snapshot: str) -
             )
     lines.extend([
         "INSERT INTO kb_chunks_fts(kb_chunks_fts) VALUES ('delete-all');",
-        "INSERT INTO kb_chunks_fts(rowid, title, heading_path, content, tags) SELECT c.id, d.title, COALESCE(c.heading_path, ''), c.content, COALESCE((SELECT group_concat(t.name, ' ') FROM kb_document_tags dt JOIN kb_tags t ON t.id = dt.tag_id WHERE dt.document_id = d.id), '') FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id;",
+        "INSERT INTO kb_chunks_fts(rowid, title, heading_path, content, tags) SELECT c.id, c.title, COALESCE(c.heading_path, ''), c.content, c.tags FROM kb_chunks c;",
         'COMMIT;',
     ])
     return '\n'.join(lines) + '\n'

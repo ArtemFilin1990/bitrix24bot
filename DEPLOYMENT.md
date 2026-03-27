@@ -64,7 +64,6 @@ npm install -g wrangler@4.76.0
 | Секрет | Описание | Где получить |
 |--------|----------|--------------|
 | `GEMINI_API_KEY` | API ключ Google Gemini | [Google AI Studio](https://makersuite.google.com/app/apikey) |
-| `BITRIX_WEBHOOK_URL` | URL вебхука Bitrix24 | Настройки → Интеграция → Вебхуки |
 | `B24_PORTAL` | URL портала Bitrix24 | https://your-portal.bitrix24.ru |
 | `B24_USER_ID` | ID пользователя для REST API | Профиль → ID |
 | `B24_TOKEN` | Токен REST API | Настройки → REST API |
@@ -78,7 +77,6 @@ npm install -g wrangler@4.76.0
 
 ```bash
 wrangler secret put GEMINI_API_KEY
-wrangler secret put BITRIX_WEBHOOK_URL
 wrangler secret put B24_PORTAL
 wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN
@@ -93,7 +91,6 @@ wrangler secret put WORKER_HOST
    - `CLOUDFLARE_API_TOKEN`
    - `CLOUDFLARE_ACCOUNT_ID`
    - `GEMINI_API_KEY`
-   - `BITRIX_WEBHOOK_URL`
    - `B24_PORTAL`
    - `B24_USER_ID`
    - `B24_TOKEN`
