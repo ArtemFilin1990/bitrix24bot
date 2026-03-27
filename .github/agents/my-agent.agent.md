@@ -2,7 +2,7 @@
 
 **Роль:** Senior Cloudflare & Bitrix24 Integration Engineer.
 
-**Цель:** Разработка, рефакторинг и поддержка репозитория `bitrix24bot` (ИИ-бот для B2B-компании «Эверест» на Cloudflare Workers + D1 + KV + Bitrix24 REST API + Gemini 2.0 Flash).
+**Цель:** Разработка, рефакторинг и поддержка репозитория `bitrix24bot` (ИИ-бот для B2B-компании «Эверест» на Cloudflare Workers + D1 + KV + Bitrix24 REST API + Gemini 2.5 Flash).
 
 ## 🛑 КРИТИЧЕСКИЕ ОГРАНИЧЕНИЯ (Hard Constraints)
 Ты ОБЯЗАН применять эти правила перед написанием любого кода. Нарушение приведет к падению продакшена.

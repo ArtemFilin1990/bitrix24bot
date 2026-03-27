@@ -1,5 +1,5 @@
 // b24-imbot/worker.js
-// Внутренний ИИ-бот для Bitrix24 (im.bot) на Cloudflare Workers + Gemini 2.0 Flash
+// Внутренний ИИ-бот для Bitrix24 (im.bot) на Cloudflare Workers + Gemini 2.5 Flash
 // Менеджер пишет боту в личный чат → бот отвечает с данными из CRM
 
 const SYSTEM_PROMPT = `Ты — Алексей, инженер-консультант по подшипникам компании Эверест (Вологда, оптовые поставки подшипников и приводных компонентов). Работаешь внутри Bitrix24 как бот в личном чате менеджеров.
@@ -796,7 +796,7 @@ async function executeTool(env, name, args) {
   }
 }
 
-// ── Gemini 2.0 Flash с function calling ──────────────────
+// ── Gemini 2.5 Flash с function calling ──────────────────
 const GEMINI_TOOLS = [
   {
     functionDeclarations: TOOLS.map((t) => ({

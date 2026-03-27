@@ -43,7 +43,7 @@ Portal: ewerest.bitrix24.ru
 ### Архитектура
 ```
 Runtime: Cloudflare Workers (JavaScript ES modules)
-AI: Google Gemini 2.0 Flash с function calling
+AI: Google Gemini 2.5 Flash с function calling
 Database: Cloudflare D1 (SQLite) - каталог подшипников
 Cache: Cloudflare KV - история диалогов (24 часа)
 CRM: Bitrix24 REST API
