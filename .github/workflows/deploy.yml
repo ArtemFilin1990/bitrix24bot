@@ -24,6 +24,15 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Verify wrangler.toml configuration
+        run: |
+          echo "Checking wrangler.toml exists..."
+          ls -la wrangler.toml
+          echo "Main entry point:"
+          grep "^main" wrangler.toml
+          echo "Verifying worker.js exists:"
+          ls -la b24-imbot/worker.js
+
       - name: Install Wrangler
         run: npm install -g wrangler@4.76.0
 
