@@ -26,7 +26,12 @@ function makeMockDb(results = []) {
     all:  async () => ({ results }),
     run:  async () => ({}),
   };
-  return { prepare: () => stmt };
+  const db = {
+    prepare: () => stmt,
+    withSession: () => db,
+    getBookmark: () => null,
+  };
+  return db;
 }
 
 /**

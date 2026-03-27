@@ -990,6 +990,12 @@ export default {
     if (request.method === "OPTIONS")
       return new Response(null, { headers: CORS });
 
+    // D1 Sessions API — sequential consistency + read replica support
+    // https://developers.cloudflare.com/d1/worker-api/d1-database/#withsession
+    if (env.CATALOG?.withSession) {
+      env = { ...env, CATALOG: env.CATALOG.withSession("first-unconstrained") };
+    }
+
     const url = new URL(request.url);
 
     // Регистрация бота (вызвать один раз вручную)
