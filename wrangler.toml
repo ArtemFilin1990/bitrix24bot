@@ -16,6 +16,8 @@ CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
 binding = "CHAT_HISTORY"
 id = "f7257a53733146b6926eb20321ab4896"
 
+# D1 — каталог подшипников, база знаний, бренды, аналоги
+# migrations_dir — включает инкрементальные миграции через `wrangler d1 migrations apply`
 [[d1_databases]]
 binding = "CATALOG"
 database_name = "bearings-catalog"

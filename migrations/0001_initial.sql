@@ -1,6 +1,6 @@
--- Initial D1 schema for b24-imbot
+-- Migration 0001: Initial D1 schema for b24-imbot (2026-03)
+-- Baseline schema migrated from schema.sql.
 -- Base runtime schema + normalized ingestion tables.
--- Migrated from schema.sql
 
 PRAGMA foreign_keys = ON;
 

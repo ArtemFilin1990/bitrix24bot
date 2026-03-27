@@ -1,6 +1,6 @@
--- DEPRECATED: This file is kept for reference only.
+-- DEPRECATED (2026-03): This file is kept for reference only.
 -- The canonical schema is now maintained as D1 migrations in migrations/.
--- Use `wrangler d1 migrations apply` to apply schema changes.
+-- Use `wrangler d1 migrations apply bearings-catalog` to apply schema changes.
 --
 -- D1 schema for b24-imbot
 -- Base runtime schema + normalized ingestion tables.
