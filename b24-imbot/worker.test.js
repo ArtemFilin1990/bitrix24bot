@@ -170,6 +170,52 @@ describe('IMPORT_SECRET guards', () => {
   });
 });
 
+// ── /import-catalog: apostrophe handling ────────────────────────────────────
+
+describe('/import-catalog apostrophe handling', () => {
+  it('bearing names with apostrophes are stored verbatim (no double-escaping)', async () => {
+    // CSV with a name containing a single apostrophe — e.g. "D'Arcy 6205"
+    const csvData = "Наименование;Артикул;Завод;Вес, кг\nD'Arcy 6205;6205;SKF;0.1";
+    const boundValues = [];
+
+    // Mock db that captures the values passed to .bind()
+    const captureStmt = {
+      bind: (...args) => { boundValues.push(...args); return captureStmt; },
+      all:  async () => ({ results: [] }),
+      run:  async () => ({}),
+    };
+    const captureDb = {
+      prepare: () => captureStmt,
+      withSession: () => captureDb,
+      getBookmark: () => null,
+    };
+
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      // Simulates downloading the CSV file from Bitrix24 Disk
+      return new Response(csvData, {
+        status: 200,
+        headers: { 'Content-Type': 'text/csv' },
+      });
+    }));
+
+    const res = await worker.fetch(
+      makeRequest('/import-catalog?secret=test-secret&url=https://example.com/file.csv'),
+      makeEnv({ CATALOG: captureDb }),
+    );
+
+    vi.unstubAllGlobals();
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.inserted).toBe(1);
+
+    // The stored name must be the original value — single apostrophe, not doubled
+    expect(boundValues).toContain("D'Arcy 6205");
+    expect(boundValues).not.toContain("D''Arcy 6205");
+  });
+});
+
 // ── /reset endpoint ───────────────────────────────────────────────────────────
 
 describe('/reset endpoint', () => {
