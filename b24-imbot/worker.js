@@ -226,6 +226,7 @@ const TOOLS = [
 // ── B24 helpers ───────────────────────────────────────────
 async function b24(env, method, params = {}) {
   const url = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${method}.json`;
+  console.log(`🔗 B24 API call: ${method}`, { params: JSON.stringify(params).slice(0, 100) });
   const r = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -233,16 +234,21 @@ async function b24(env, method, params = {}) {
   });
   if (!r.ok) {
     const text = await r.text().catch(() => "");
+    console.error(`❌ B24 ${method}: HTTP ${r.status}`, { response: text.slice(0, 200) });
     throw new Error(`B24 ${method}: HTTP ${r.status} — ${text.slice(0, 200)}`);
   }
   const d = await r.json();
-  if (d.error)
+  if (d.error) {
+    console.error(`❌ B24 ${method}: API error`, { error: d.error, description: d.error_description });
     throw new Error(`B24 ${method}: ${d.error} — ${d.error_description || ""}`);
+  }
+  console.log(`✅ B24 ${method}: success`);
   return d.result;
 }
 
 // Отправить сообщение от бота в чат
 async function botReply(env, chatId, text) {
+  console.log(`💬 botReply to ${chatId}:`, { textLength: text.length, textPreview: text.slice(0, 100) });
   await b24(env, "imbot.message.add", {
     BOT_ID: env.BOT_ID,
     CLIENT_ID: env.CLIENT_ID,
@@ -773,9 +779,12 @@ async function askGemini(env, history, userText) {
   const MODEL = env.GEMINI_MODEL || "gemini-2.5-flash";
   const URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
 
+  console.log(`🤖 askGemini: model=${MODEL}, historyLength=${history.length}`);
+
   const contents = [...history, { role: "user", parts: [{ text: userText }] }];
 
   for (let i = 0; i < 5; i++) {
+    console.log(`🔄 Gemini iteration ${i + 1}/5`);
     const r = await fetch(URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -789,10 +798,14 @@ async function askGemini(env, history, userText) {
 
     if (!r.ok) {
       const text = await r.text().catch(() => "");
+      console.error(`❌ Gemini: HTTP ${r.status}`, { response: text.slice(0, 300) });
       throw new Error(`Gemini: HTTP ${r.status} — ${text.slice(0, 200)}`);
     }
     const data = await r.json();
-    if (data.error) throw new Error(`Gemini: ${data.error.message}`);
+    if (data.error) {
+      console.error("❌ Gemini: API error", data.error);
+      throw new Error(`Gemini: ${data.error.message}`);
+    }
 
     // Обработка заблокированных ответов (safety filters)
     const candidate = data.candidates?.[0];
@@ -801,7 +814,7 @@ async function askGemini(env, history, userText) {
         candidate?.finishReason ||
         data.promptFeedback?.blockReason ||
         "UNKNOWN";
-      console.error("Gemini: empty response, reason:", blockReason);
+      console.error("⚠️ Gemini: empty response, reason:", blockReason);
       return {
         text: "Не удалось получить ответ от ИИ. Попробуйте переформулировать вопрос.",
         history: contents.slice(-20),
@@ -813,27 +826,32 @@ async function askGemini(env, history, userText) {
 
     const fnCalls = parts.filter((p) => p.functionCall);
     if (!fnCalls.length) {
+      const responseText = parts
+        .filter((p) => p.text)
+        .map((p) => p.text)
+        .join("") || "—";
+      console.log(`✅ Gemini: final response (${responseText.length} chars)`);
       return {
-        text:
-          parts
-            .filter((p) => p.text)
-            .map((p) => p.text)
-            .join("") || "—",
+        text: responseText,
         history: contents.slice(-20), // хранить последние 20 turns
       };
     }
 
     // Выполнить tool calls
+    console.log(`🔧 Gemini: executing ${fnCalls.length} tool calls:`, fnCalls.map(fc => fc.functionCall.name));
     const fnResults = await Promise.all(
       fnCalls.map(async (p) => {
         let resultStr;
         try {
+          console.log(`  🔨 Tool: ${p.functionCall.name}`, p.functionCall.args);
           resultStr = await executeTool(
             env,
             p.functionCall.name,
             p.functionCall.args,
           );
+          console.log(`  ✅ Tool result: ${resultStr.slice(0, 200)}...`);
         } catch (err) {
+          console.error(`  ❌ Tool error: ${p.functionCall.name}`, err);
           resultStr = JSON.stringify({ error: err?.message || String(err) });
         }
         const fnResp = {
@@ -852,6 +870,7 @@ async function askGemini(env, history, userText) {
     contents.push({ role: "function", parts: fnResults });
   }
 
+  console.error("⚠️ Gemini: iteration limit exceeded");
   return { text: "Превышен лимит итераций.", history: contents.slice(-20) };
 }
 
@@ -1689,7 +1708,7 @@ export default {
       // Валидация токена приложения (защита от неавторизованных запросов)
       const appToken = data["auth[application_token]"];
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
-        console.error("Webhook rejected: invalid app token");
+        console.error("Webhook rejected: invalid app token", { appToken: appToken?.slice(0, 10) + '...', expected: env.B24_APP_TOKEN?.slice(0, 10) + '...' });
         return json({ error: "Forbidden: Invalid application token" }, 403);
       }
 
@@ -1699,9 +1718,18 @@ export default {
         data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
       const message = data["data[PARAMS][MESSAGE]"]?.trim();
 
+      // Логирование входящего вебхука
+      console.log("📨 Webhook received:", {
+        event,
+        userId,
+        chatId,
+        messageLength: message?.length || 0,
+        messagePreview: message?.slice(0, 50)
+      });
+
       // Обработать только входящие сообщения боту
       if (event !== "ONIMBOTMESSAGEADD" || !message || !userId || !chatId) {
-        console.log("Webhook skipped:", { event, hasMessage: !!message, userId, chatId });
+        console.log("⏭️ Webhook skipped:", { event, hasMessage: !!message, userId, chatId });
         return json({ ok: true });
       }
 
@@ -1737,7 +1765,19 @@ export default {
         // также реагируем если бот @-упомянут (Bitrix24 кодирует как [USER=<id>])
         const botMentioned =
           env.BOT_ID && message.includes(`[USER=${env.BOT_ID}]`);
-        if (!hit && !botMentioned) return json({ ok: true }); // не реагировать
+
+        console.log("👥 Group chat message:", {
+          keywordHit: hit || null,
+          botMentioned,
+          willRespond: !!(hit || botMentioned)
+        });
+
+        if (!hit && !botMentioned) {
+          console.log("🔇 Silent mode: no keywords or mention in group chat");
+          return json({ ok: true }); // не реагировать
+        }
+      } else {
+        console.log("💬 Personal chat: will respond");
       }
 
       // Команды (работают и в личном чате, и в групповом)
@@ -1746,6 +1786,7 @@ export default {
         message === "/помощь" ||
         message === "помощь"
       ) {
+        console.log("📖 Command: /помощь");
         await botReply(
           env,
           chatId,
@@ -1764,6 +1805,7 @@ export default {
       }
 
       if (message === "/сброс" || message === "/reset") {
+        console.log("🔄 Command: /сброс");
         const safeUser = sanitizeId(userId);
         const safeDialog = sanitizeId(chatId);
         if (safeUser && safeDialog) {
@@ -1773,17 +1815,21 @@ export default {
         return json({ ok: true });
       }
 
+      console.log("🤖 Starting AI processing...");
+
       // Тяжёлая AI-логика выполняется в фоне — воркер сразу возвращает 200 OK Bitrix24,
       // исключая таймаут вебхука (ошибка 1102 Cloudflare)
       ctx.waitUntil(
         (async () => {
           try {
+            console.log("⌨️ Showing typing indicator...");
             // Показать "печатает..."
             await b24(env, "im.dialog.writing", { DIALOG_ID: chatId }).catch(
               (e) => console.error("im.dialog.writing error:", e),
             );
 
             const history = await getHistory(env, userId, chatId);
+            console.log("📚 History loaded:", { turns: history.length });
 
             // Добавить контекст в первый запрос сессии
             const contextMsg =
@@ -1791,16 +1837,24 @@ export default {
                 ? `[Контекст: пользователь B24 ID=${userId}, диалог=${chatId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
                 : message;
 
+            console.log("🧠 Calling Gemini...");
             const { text, history: newHistory } = await askGemini(
               env,
               history,
               contextMsg,
             );
+            console.log("✅ Gemini response received:", { textLength: text.length });
+
             await saveHistory(env, userId, chatId, newHistory);
+            console.log("💾 History saved");
+
+            console.log("📤 Sending bot reply...");
             await botReply(env, chatId, text);
+            console.log("✅ Bot reply sent successfully");
           } catch (e) {
             // Не показывать сырые внутренние ошибки пользователю
-            console.error("Error in bot logic:", e);
+            console.error("❌ Error in bot logic:", e);
+            console.error("Error stack:", e.stack);
             const errMsg = e?.message || String(e);
             const safeMessage =
               errMsg.includes("Gemini") || errMsg.includes("B24")
