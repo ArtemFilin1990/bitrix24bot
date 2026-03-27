@@ -249,12 +249,44 @@ async function b24(env, method, params = {}) {
 // Отправить сообщение от бота в чат
 async function botReply(env, chatId, text) {
   console.log(`💬 botReply to ${chatId}:`, { textLength: text.length, textPreview: text.slice(0, 100) });
-  await b24(env, "imbot.message.add", {
-    BOT_ID: env.BOT_ID,
-    CLIENT_ID: env.CLIENT_ID,
-    DIALOG_ID: chatId,
-    MESSAGE: text,
-  });
+
+  // Валидация параметров
+  if (!chatId) {
+    console.error("❌ botReply: missing chatId");
+    throw new Error("botReply: chatId is required");
+  }
+  if (!text || typeof text !== 'string') {
+    console.error("❌ botReply: invalid text", { text: typeof text });
+    throw new Error("botReply: text must be a non-empty string");
+  }
+  if (!env.BOT_ID) {
+    console.error("❌ botReply: missing BOT_ID in environment");
+    throw new Error("botReply: BOT_ID not configured");
+  }
+  if (!env.CLIENT_ID) {
+    console.error("❌ botReply: missing CLIENT_ID in environment");
+    throw new Error("botReply: CLIENT_ID not configured");
+  }
+
+  try {
+    const result = await b24(env, "imbot.message.add", {
+      BOT_ID: env.BOT_ID,
+      CLIENT_ID: env.CLIENT_ID,
+      DIALOG_ID: chatId,
+      MESSAGE: text,
+    });
+    console.log(`✅ botReply success:`, { chatId, messageId: result?.message_id || 'unknown' });
+    return result;
+  } catch (error) {
+    console.error(`❌ botReply FAILED:`, {
+      chatId,
+      error: error.message,
+      stack: error.stack,
+      BOT_ID: env.BOT_ID,
+      CLIENT_ID: env.CLIENT_ID?.slice(0, 10) + '...'
+    });
+    throw error; // Re-throw so caller can handle
+  }
 }
 
 function extractHeadingChunks(markdown) {
@@ -1767,17 +1799,25 @@ export default {
           env.BOT_ID && message.includes(`[USER=${env.BOT_ID}]`);
 
         console.log("👥 Group chat message:", {
+          chatId,
+          userId,
           keywordHit: hit || null,
           botMentioned,
-          willRespond: !!(hit || botMentioned)
+          willRespond: !!(hit || botMentioned),
+          messagePreview: message.slice(0, 100)
         });
 
         if (!hit && !botMentioned) {
-          console.log("🔇 Silent mode: no keywords or mention in group chat");
+          console.log("🔇 Silent mode: no keywords or mention in group chat", {
+            chatId,
+            userId,
+            keywords: KEYWORDS,
+            messageLength: message.length
+          });
           return json({ ok: true }); // не реагировать
         }
       } else {
-        console.log("💬 Personal chat: will respond");
+        console.log("💬 Personal chat: will respond", { chatId, userId });
       }
 
       // Команды (работают и в личном чате, и в групповом)
@@ -1815,21 +1855,23 @@ export default {
         return json({ ok: true });
       }
 
-      console.log("🤖 Starting AI processing...");
+      console.log("🤖 Starting AI processing...", { chatId, userId, messageLength: message.length });
 
       // Тяжёлая AI-логика выполняется в фоне — воркер сразу возвращает 200 OK Bitrix24,
       // исключая таймаут вебхука (ошибка 1102 Cloudflare)
       ctx.waitUntil(
         (async () => {
+          let responseAttempted = false;
           try {
-            console.log("⌨️ Showing typing indicator...");
+            console.log("⌨️ Showing typing indicator...", { chatId });
             // Показать "печатает..."
             await b24(env, "im.dialog.writing", { DIALOG_ID: chatId }).catch(
               (e) => console.error("im.dialog.writing error:", e),
             );
 
+            console.log("📚 Loading conversation history...", { userId, chatId });
             const history = await getHistory(env, userId, chatId);
-            console.log("📚 History loaded:", { turns: history.length });
+            console.log("📚 History loaded:", { turns: history.length, chatId });
 
             // Добавить контекст в первый запрос сессии
             const contextMsg =
@@ -1837,32 +1879,65 @@ export default {
                 ? `[Контекст: пользователь B24 ID=${userId}, диалог=${chatId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
                 : message;
 
-            console.log("🧠 Calling Gemini...");
+            console.log("🧠 Calling Gemini...", { historyLength: history.length, contextLength: contextMsg.length });
             const { text, history: newHistory } = await askGemini(
               env,
               history,
               contextMsg,
             );
-            console.log("✅ Gemini response received:", { textLength: text.length });
+            console.log("✅ Gemini response received:", {
+              textLength: text.length,
+              chatId,
+              hasContent: text && text.trim().length > 0
+            });
 
+            // Проверка что Gemini вернул осмысленный ответ
+            if (!text || text.trim().length === 0) {
+              console.error("⚠️ Gemini returned empty response, using fallback", { chatId });
+              const fallbackText = "Извините, не удалось сформировать ответ. Попробуйте переформулировать вопрос.";
+              responseAttempted = true;
+              await botReply(env, chatId, fallbackText);
+              console.log("✅ Fallback reply sent successfully", { chatId });
+              return;
+            }
+
+            console.log("💾 Saving conversation history...", { chatId, newHistoryLength: newHistory.length });
             await saveHistory(env, userId, chatId, newHistory);
-            console.log("💾 History saved");
+            console.log("💾 History saved", { chatId });
 
-            console.log("📤 Sending bot reply...");
+            console.log("📤 Sending bot reply...", { chatId, textLength: text.length });
+            responseAttempted = true;
             await botReply(env, chatId, text);
-            console.log("✅ Bot reply sent successfully");
+            console.log("✅ Bot reply sent successfully", { chatId, userId });
           } catch (e) {
             // Не показывать сырые внутренние ошибки пользователю
-            console.error("❌ Error in bot logic:", e);
-            console.error("Error stack:", e.stack);
+            console.error("❌ Error in bot logic:", {
+              error: e.message,
+              stack: e.stack,
+              chatId,
+              userId,
+              responseAttempted
+            });
+
             const errMsg = e?.message || String(e);
             const safeMessage =
               errMsg.includes("Gemini") || errMsg.includes("B24")
                 ? "⚠️ Временная ошибка связи с сервисом. Попробуйте через минуту."
                 : "⚠️ Произошла ошибка при обработке запроса. Обратитесь к администратору.";
-            await botReply(env, chatId, safeMessage).catch((err) =>
-              console.error("Error sending error reply:", err),
-            );
+
+            try {
+              console.log("📤 Attempting to send error message to user...", { chatId });
+              await botReply(env, chatId, safeMessage);
+              console.log("✅ Error message sent to user", { chatId });
+            } catch (replyErr) {
+              console.error("❌ CRITICAL: Failed to send error reply:", {
+                chatId,
+                userId,
+                error: replyErr.message,
+                stack: replyErr.stack,
+                originalError: e.message
+              });
+            }
           }
         })(),
       );

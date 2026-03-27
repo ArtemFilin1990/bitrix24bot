@@ -1,7 +1,9 @@
 {
   "type": "module",
   "scripts": {
-    "test:worker": "vitest run --config vitest.config.js"
+    "test:worker": "vitest run --config vitest.config.js",
+    "deploy": "wrangler deploy",
+    "deploy:versions": "wrangler versions upload"
   },
   "devDependencies": {
     "vitest": "^3.0.0"
