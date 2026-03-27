@@ -1049,9 +1049,9 @@ export default {
         const rows = [];
         for (let i = 1; i < lines.length; i++) {
           const cols = lines[i].split(";");
-          const name = (cols[iName] || "").trim().replace(/'/g, "''");
-          const article = (cols[iArt] || "").trim().replace(/'/g, "''");
-          const brand = (cols[iBrand] || "").trim().replace(/'/g, "''");
+          const name = (cols[iName] || "").trim();
+          const article = (cols[iArt] || "").trim();
+          const brand = (cols[iBrand] || "").trim();
           const wRaw = (cols[iWeight] || "").trim().replace(",", ".");
           const weight = parseFloat(wRaw) || null;
           if (name && article) rows.push({ name, article, brand, weight });
