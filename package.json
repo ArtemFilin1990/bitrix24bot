@@ -3,7 +3,7 @@
   "scripts": {
     "test": "vitest run --config vitest.config.js",
     "test:worker": "vitest run --config vitest.config.js",
-    "test:python": "python3 -m pytest tests/ -v || python3 -m unittest discover tests/ -v",
+    "test:python": "command -v pytest >/dev/null 2>&1 && python3 -m pytest tests/ -v || python3 -m unittest discover tests/ -v",
     "verify": "node verify-worker.mjs && node verify-schema.mjs && node verify-gemini-db-integration.mjs",
     "verify:worker": "node verify-worker.mjs",
     "verify:schema": "node verify-schema.mjs",

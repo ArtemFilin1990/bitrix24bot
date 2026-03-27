@@ -102,14 +102,11 @@ check(
 
 console.log("\n4️⃣  Gemini tools ↔ executeTool consistency:\n");
 
-// Extract tool names from TOOLS array
-const toolNameMatches = worker.match(/name:\s*"(\w+)"/g) || [];
-const toolNames = toolNameMatches
-  .map((m) => m.match(/"(\w+)"/)[1])
-  .filter((name) => !["object", "string", "integer", "number", "array"].includes(name));
-
-// Deduplicate
-const uniqueToolNames = [...new Set(toolNames)];
+// Extract tool names specifically from the TOOLS array definition
+const toolsArrayMatch = worker.match(/const TOOLS = \[([\s\S]*?)\];/);
+const toolsBlock = toolsArrayMatch ? toolsArrayMatch[1] : "";
+const toolNameMatches = toolsBlock.match(/name:\s*"(\w+)"/g) || [];
+const uniqueToolNames = toolNameMatches.map((m) => m.match(/"(\w+)"/)[1]);
 
 // Extract executeTool switch cases
 const switchCases = worker.match(/case\s+"(\w+)":/g) || [];
@@ -195,7 +192,7 @@ check(
 // Check for potential SQL injection — allow safe batch placeholder patterns
 // like `INSERT ... VALUES ${placeholders}` where placeholders is (?,?,?),
 // but flag direct value interpolation in WHERE/SET clauses
-const prepareBlocks = worker.match(/prepare\s*\(\s*`[^`]*`/g) || [];
+const prepareBlocks = worker.match(/prepare\s*\(\s*`[\s\S]*?`/g) || [];
 let unsafeInterpolationCount = 0;
 for (const block of prepareBlocks) {
   if (!block.includes("${")) continue;
