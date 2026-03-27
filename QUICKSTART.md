@@ -19,7 +19,6 @@ IMPORT_SECRET=любая-случайная-строка
 wrangler secret put B24_PORTAL
 wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN
-wrangler secret put BITRIX_WEBHOOK_URL
 wrangler secret put WORKER_HOST
 ```
 
@@ -56,7 +55,6 @@ wrangler login
 
 # Установите секреты
 wrangler secret put GEMINI_API_KEY
-wrangler secret put BITRIX_WEBHOOK_URL
 wrangler secret put B24_PORTAL
 wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN

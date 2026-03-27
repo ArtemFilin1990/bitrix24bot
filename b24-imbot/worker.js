@@ -598,13 +598,13 @@ async function executeTool(env, name, args) {
           // Поиск по d×D или d×D×B в таблице catalog (ISO размеры)
           const [d, D, B] = dimMatch;
           const dimSql = B
-            ? `SELECT item_id as designation, category_ru, series_ru, d_mm, big_d_mm, b_mm, mass_kg, brand_display as manufacturer,
+            ? `SELECT designation, category_ru, series_ru, d_mm, big_d_mm, b_mm, mass_kg, brand_display as manufacturer,
                       NULL as name_ru, NULL as price_rub, NULL as qty, NULL as stock_flag,
-                      NULL as gost_ref, NULL as iso_ref, NULL as suffix_desc
+                      gost_ref, iso_ref, NULL as suffix_desc
                FROM catalog WHERE d_mm=? AND big_d_mm=? AND b_mm=? LIMIT 10`
-            : `SELECT item_id as designation, category_ru, series_ru, d_mm, big_d_mm, b_mm, mass_kg, brand_display as manufacturer,
+            : `SELECT designation, category_ru, series_ru, d_mm, big_d_mm, b_mm, mass_kg, brand_display as manufacturer,
                       NULL as name_ru, NULL as price_rub, NULL as qty, NULL as stock_flag,
-                      NULL as gost_ref, NULL as iso_ref, NULL as suffix_desc
+                      gost_ref, iso_ref, NULL as suffix_desc
                FROM catalog WHERE d_mm=? AND big_d_mm=? LIMIT 10`;
           const dimRes = B
             ? await env.CATALOG.prepare(dimSql).bind(d, D, B).all()

@@ -153,46 +153,52 @@ describe('IMPORT_SECRET guards', () => {
 // ── /reset endpoint ───────────────────────────────────────────────────────────
 
 describe('/reset endpoint', () => {
-  const postReset = (user_id, env) =>
+  const postReset = (user_id, dialog_id, env) =>
     worker.fetch(
       makeRequest('/reset', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ user_id }),
+        body:    JSON.stringify({ user_id, dialog_id }),
       }),
       env ?? makeEnv(),
     );
 
   it('returns 400 for a non-numeric user_id string', async () => {
-    const res = await postReset('invalid');
+    const res = await postReset('invalid', '100');
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe('Invalid user_id');
   });
 
   it('returns 400 for null user_id', async () => {
-    const res = await postReset(null);
+    const res = await postReset(null, '100');
     expect(res.status).toBe(400);
   });
 
   it('returns 400 for alphanumeric user_id', async () => {
-    const res = await postReset('123abc');
+    const res = await postReset('123abc', '100');
     expect(res.status).toBe(400);
   });
 
-  it('returns 200 and deletes KV key for a valid numeric user_id', async () => {
-    const kv = makeMockKV();
-    await kv.put('history:42', JSON.stringify([{ role: 'user', parts: [] }]));
+  it('returns 400 when dialog_id is missing', async () => {
+    const res = await postReset('42', undefined);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('dialog_id required for safety');
+  });
 
-    const res = await postReset('42', makeEnv({ CHAT_HISTORY: kv }));
+  it('returns 200 and deletes KV key for valid user_id and dialog_id', async () => {
+    const kv = makeMockKV();
+    await kv.put('history:42:100', JSON.stringify([{ role: 'user', parts: [] }]));
+
+    const res = await postReset('42', '100', makeEnv({ CHAT_HISTORY: kv }));
 
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
     // KV entry must have been deleted
-    expect(await kv.get('history:42')).toBeNull();
+    expect(await kv.get('history:42:100')).toBeNull();
   });
 
   it('returns 200 even when the key did not exist in KV', async () => {
-    const res = await postReset('99');
+    const res = await postReset('99', '200');
     expect(res.status).toBe(200);
   });
 });
@@ -390,7 +396,7 @@ describe('sanitizeUserId behaviour', () => {
         makeRequest('/reset', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ user_id: userId }),
+          body:    JSON.stringify({ user_id: userId, dialog_id: '100' }),
         }),
         makeEnv(),
       );

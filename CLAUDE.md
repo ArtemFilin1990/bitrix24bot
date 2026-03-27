@@ -274,7 +274,9 @@ Must be done once after initial deployment.
 - **Single-file architecture**: all logic in `b24-imbot/worker.js` — no bundler, no imports.
 - **Environment variables** accessed via `env.*` (injected by Wrangler):
   - `env.GEMINI_API_KEY` — Google Gemini API key
-  - `env.BITRIX_WEBHOOK_URL` — Bitrix24 webhook base URL
+  - `env.B24_PORTAL` — Bitrix24 portal URL
+  - `env.B24_USER_ID` — Bitrix24 REST auth user ID
+  - `env.B24_TOKEN` — Bitrix24 REST auth token
   - `env.IMPORT_SECRET` — Secret for admin import endpoints
   - `env.BOT_ID` — Bitrix24 bot ID
   - `env.CHAT_HISTORY` — KV namespace binding
@@ -336,12 +338,11 @@ All workflows use `wrangler@4.76.0` and Node.js 24. `deploy.yml` and `seed-datab
 | Variable | Location | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | Cloudflare Worker secret | Google Gemini API access |
-| `BITRIX_WEBHOOK_URL` | Cloudflare Worker secret | Bitrix24 REST endpoint |
-| `IMPORT_SECRET` | Cloudflare Worker secret | Protects admin import endpoints |
-| `WORKER_HOST` | Cloudflare Worker secret | Worker domain (for registration callback) |
 | `B24_PORTAL` | Cloudflare Worker secret | Bitrix24 portal URL |
 | `B24_USER_ID` | Cloudflare Worker secret | Bitrix24 REST auth user ID |
 | `B24_TOKEN` | Cloudflare Worker secret | Bitrix24 REST auth token |
+| `IMPORT_SECRET` | Cloudflare Worker secret | Protects admin import endpoints |
+| `WORKER_HOST` | Cloudflare Worker secret | Worker domain (for registration callback) |
 | `BOT_ID` | `wrangler.toml` vars | Bitrix24 bot registration ID |
 | `CLIENT_ID` | `wrangler.toml` vars | Bitrix24 app client ID |
 | `CLOUDFLARE_API_TOKEN` | GitHub Actions secret | Wrangler deployment auth |

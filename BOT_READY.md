@@ -56,7 +56,6 @@ export CLOUDFLARE_ACCOUNT_ID=ваш-account-id
 wrangler secret put B24_PORTAL
 wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN
-wrangler secret put BITRIX_WEBHOOK_URL
 wrangler secret put WORKER_HOST
 ```
 
@@ -99,7 +98,6 @@ wrangler kv:namespace create "CHAT_HISTORY"
 
 # 4. Установите секреты
 wrangler secret put GEMINI_API_KEY
-wrangler secret put BITRIX_WEBHOOK_URL
 wrangler secret put B24_PORTAL
 wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN
