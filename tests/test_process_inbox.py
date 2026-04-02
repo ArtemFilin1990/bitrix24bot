@@ -594,6 +594,24 @@ class ProcessInboxTests(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(row[0], 0)
 
+    def test_large_doc_is_capped_to_avoid_sqlite_toobig(self):
+        """Very large docs should be truncated in long text fields with marker suffix."""
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "inbox"
+            (inbox / "docs").mkdir(parents=True)
+            big = inbox / "docs" / "big.md"
+            big.write_text("# Большой документ\n" + ("a" * 250_000), encoding="utf-8")
+            seed = Path(tmp) / "seed.sql"
+            self.run_script(inbox, seed)
+            conn = self.prepare_db(seed)
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT raw_markdown, plain_text FROM kb_documents WHERE slug = 'big'"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertIn("[TRUNCATED:raw_markdown:", row[0])
+            self.assertIn("[TRUNCATED:plain_text:", row[1])
+
 
 if __name__ == "__main__":
     unittest.main()

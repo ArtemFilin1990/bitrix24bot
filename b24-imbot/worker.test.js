@@ -168,6 +168,21 @@ describe('IMPORT_SECRET guards', () => {
     const res = await worker.fetch(makeRequest('/import-catalog'), makeEnv());
     expect(res.status).toBe(403);
   });
+
+  it.each([
+    '/import-catalog',
+    '/import-catalog-csv',
+    '/import-doc',
+    '/preview-file',
+    '/import-analogs',
+  ])('GET %s rejects non-https direct url', async (path) => {
+    const res = await worker.fetch(
+      makeRequest(`${path}?secret=test-secret&url=http://127.0.0.1/test.csv`),
+      makeEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain('https');
+  });
 });
 
 // ── /reset endpoint ───────────────────────────────────────────────────────────
@@ -226,6 +241,20 @@ describe('/reset endpoint', () => {
 // ── /imbot routing ────────────────────────────────────────────────────────────
 
 describe('/imbot event routing', () => {
+  it('rejects webhook with invalid B24 app token', async () => {
+    const res = await worker.fetch(
+      makeImbotRequest({
+        event: 'ONIMBOTMESSAGEADD',
+        'auth[application_token]': 'invalid-token',
+        'data[USER][ID]': '42',
+        'data[PARAMS][DIALOG_ID]': '42',
+        'data[PARAMS][MESSAGE]': 'Привет',
+      }),
+      makeEnv({ B24_APP_TOKEN: 'expected-token' }),
+    );
+    expect(res.status).toBe(403);
+  });
+
   it('non-ONIMBOTMESSAGEADD event returns {ok:true} immediately', async () => {
     const res = await worker.fetch(
       makeImbotRequest({ event: 'ONIMBOTDELETE' }),

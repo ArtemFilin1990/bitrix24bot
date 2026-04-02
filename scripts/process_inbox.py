@@ -34,6 +34,16 @@ from build_kb_seed import (  # noqa: E402
 )
 
 _DEFAULT_SOURCE_REPO = "ArtemFilin1990/bitrix24bot"
+_MAX_TEXT_FIELD_CHARS = 10_000
+
+
+def _cap_text(value: str, field_name: str) -> str:
+    """Cap oversized SQL text literals to avoid SQLITE_TOOBIG on wrangler d1 execute."""
+    if len(value) <= _MAX_TEXT_FIELD_CHARS:
+        return value
+    suffix = f"\n\n[TRUNCATED:{field_name}:original_chars={len(value)}]"
+    keep = max(0, _MAX_TEXT_FIELD_CHARS - len(suffix))
+    return value[:keep] + suffix
 
 
 def _sha256(text: str) -> str:
@@ -101,7 +111,8 @@ def process_doc(path: Path, docs_root: Path, source_repo: str) -> str:
     rel_parent = path.parent.relative_to(docs_root).as_posix()
     section_path = "" if rel_parent == "." else rel_parent
 
-    plain_text = strip_markdown(body)
+    raw_capped = _cap_text(raw, "raw_markdown")
+    plain_text = _cap_text(strip_markdown(body), "plain_text")
     content_hash = _sha256(raw)
     source_type = str(frontmatter.get("type", "article"))
     lang = str(frontmatter.get("lang", "ru"))
@@ -131,7 +142,7 @@ def process_doc(path: Path, docs_root: Path, source_repo: str) -> str:
             "frontmatter_json, raw_markdown, plain_text, content_hash, is_canonical) "
             f"VALUES ({sql_quote(source_repo)}, {sp}, {sql_quote(source_type)}, "
             f"{sql_quote(lang)}, {sql_quote(slug)}, {sql_quote(title)}, "
-            f"{sql_quote(section_path)}, {sql_quote(fm_json)}, {sql_quote(raw)}, "
+            f"{sql_quote(section_path)}, {sql_quote(fm_json)}, {sql_quote(raw_capped)}, "
             f"{sql_quote(plain_text)}, {sql_quote(content_hash)}, {is_canonical}) "
             "ON CONFLICT(source_path) DO UPDATE SET "
             "source_type=excluded.source_type, lang=excluded.lang, slug=excluded.slug, "
@@ -169,9 +180,10 @@ def process_doc(path: Path, docs_root: Path, source_repo: str) -> str:
 
     if is_canonical and source_type == "article":
         tags_csv = ", ".join(tags)
+        knowledge_content = _cap_text(raw, "knowledge_content")
         lines.append(
             f"INSERT INTO knowledge (title, content, tags) "
-            f"VALUES ({sql_quote(title)}, {sql_quote(raw)}, {sql_quote(tags_csv)}) "
+            f"VALUES ({sql_quote(title)}, {sql_quote(knowledge_content)}, {sql_quote(tags_csv)}) "
             "ON CONFLICT(title) DO UPDATE SET content=excluded.content, tags=excluded.tags;"
         )
 
