@@ -183,7 +183,6 @@ describe('IMPORT_SECRET guards', () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toContain('https');
   });
-
 });
 
 // ── /reset endpoint ───────────────────────────────────────────────────────────
