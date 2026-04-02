@@ -9,6 +9,8 @@ compatibility_date = "2024-01-01"
 [vars]
 # ВАЖНО: BOT_ID и CLIENT_ID можно держать в [vars], т.к. они не являются секретами
 # BOT_ID получается после вызова GET /register, CLIENT_ID — при регистрации приложения
+BOT_ID    = "1275"
+CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
 
 [[kv_namespaces]]
 binding = "CHAT_HISTORY"
