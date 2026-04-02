@@ -1003,51 +1003,49 @@ async function saveHistory(env, userId, dialogId, history) {
 // Вызвать один раз: GET /register
 async function registerBot(env) {
   const workerUrl = `https://${env.WORKER_HOST}`;
-  return await b24(env, "imbot.register", {
-    CODE: "everest_ai_bot",
-    TYPE: "S", // Supervisor — получает все сообщения из групповых чатов
-    EVENT_HANDLER: `${workerUrl}/imbot`,
-    OPENLINE: "N",
-    CLIENT_ID: env.CLIENT_ID,
-    PROPERTIES: {
-      NAME: "ИИ-помощник Эверест",
-      COLOR: "AQUA",
-      WORK_POSITION: "AI Assistant",
-      PERSONAL_WWW: "https://ewerest.ru",
+  // Используем imbot.v2.Bot.register (актуальный API)
+  const result = await b24(env, "imbot.v2.Bot.register", {
+    fields: {
+      code: "everest_ai_bot",
+      botToken: env.B24_APP_TOKEN,
+      properties: {
+        name: "ИИ-помощник Эверест",
+        workPosition: "AI Assistant",
+        personalWww: "https://ewerest.ru",
+        color: "AQUA",
+      },
+      type: "supervisor", // Supervisor — получает все сообщения из групповых чатов
+      eventMode: "webhook",
+      webhookUrl: `${workerUrl}/imbot`,
     },
   });
+  // v2 возвращает { bot: { id, ... }, users: [...] }
+  return result?.bot?.id ?? result;
 }
 
 // Регистрация слэш-команд бота (вызывается после registerBot)
-// botId — ID только что созданного бота (из результата imbot.register)
+// botId — ID только что созданного бота (из результата imbot.v2.Bot.register)
 async function registerBotCommands(env, botId) {
-  const effectiveBotId = botId || env.BOT_ID;
-  const workerUrl = `https://${env.WORKER_HOST}`;
+  const effectiveBotId = parseInt(botId || env.BOT_ID);
   const commands = [
     {
-      COMMAND: "подшипник",
-      COMMON: "N",
-      HIDDEN: "N",
-      EXTRANET_SUPPORT: "N",
-      LANG: [{ LANGUAGE_ID: "ru", TITLE: "Найти подшипник по артикулу", PARAMS: "Артикул (например: 6205-2RS)" }],
-      EVENT_COMMAND_ADD: `${workerUrl}/imbot`,
+      command: "подшипник",
+      title: { ru: "Найти подшипник по артикулу" },
+      params: { ru: "Артикул (например: 6205-2RS)" },
     },
     {
-      COMMAND: "аналог",
-      COMMON: "N",
-      HIDDEN: "N",
-      EXTRANET_SUPPORT: "N",
-      LANG: [{ LANGUAGE_ID: "ru", TITLE: "Найти аналог подшипника", PARAMS: "Артикул (например: 180205)" }],
-      EVENT_COMMAND_ADD: `${workerUrl}/imbot`,
+      command: "аналог",
+      title: { ru: "Найти аналог подшипника" },
+      params: { ru: "Артикул (например: 180205)" },
     },
   ];
   return Promise.all(
     commands.map((cmd) =>
-      b24(env, "imbot.command.register", {
-        BOT_ID: effectiveBotId,
-        CLIENT_ID: env.CLIENT_ID,
+      b24(env, "imbot.v2.Command.register", {
+        botId: effectiveBotId,
+        botToken: env.B24_APP_TOKEN,
         ...cmd,
-      }).catch((e) => ({ error: e.message, command: cmd.COMMAND }))
+      }).catch((e) => ({ error: e.message, command: cmd.command }))
     )
   );
 }
@@ -1079,13 +1077,20 @@ export default {
         return json({ error: "Forbidden" }, 403);
       }
       try {
+        // Удаляем старого бота перед перерегистрацией (игнорируем ошибки)
+        if (env.BOT_ID) {
+          await b24(env, "imbot.v2.Bot.unregister", {
+            botId: parseInt(env.BOT_ID),
+            botToken: env.B24_APP_TOKEN,
+          }).catch(() => {});
+        }
         const result = await registerBot(env);
         const commands = await registerBotCommands(env, result);
         return json({
           ok: true,
           bot_id: result,
           commands,
-          note: "Сохрани BOT_ID в secrets: wrangler secret put BOT_ID",
+          note: "Сохрани BOT_ID в Dashboard Cloudflare: Variables → BOT_ID",
         });
       } catch (e) {
         return json({ error: e.message }, 500);
