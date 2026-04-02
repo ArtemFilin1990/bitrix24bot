@@ -1038,6 +1038,11 @@ async function registerBotCommands(env, botId) {
       title: { ru: "Найти аналог подшипника" },
       params: { ru: "Артикул (например: 180205)" },
     },
+    {
+      command: "статус",
+      title: { ru: "Статус бота" },
+      params: { ru: "" },
+    },
   ];
   return Promise.all(
     commands.map((cmd) =>
@@ -1839,6 +1844,30 @@ export default {
       });
     }
 
+    // Дистанционное управление: отправить сообщение в любой чат Bitrix24
+    // POST /send  { "secret": "<IMPORT_SECRET>", "chat_id": "...", "text": "..." }
+    if (url.pathname === "/send" && request.method === "POST") {
+      let body;
+      try {
+        body = await request.json();
+      } catch (e) {
+        return json({ error: "Invalid JSON body" }, 400);
+      }
+      if (body.secret !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const chatId = sanitizeId(body.chat_id);
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      if (!chatId) return json({ error: "chat_id required" }, 400);
+      if (!text) return json({ error: "text required" }, 400);
+      try {
+        await botReply(env, chatId, text);
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
     // Основной обработчик событий от Bitrix24
     if (url.pathname === "/imbot" && request.method === "POST") {
       const body = await request.text();
@@ -1899,6 +1928,21 @@ export default {
                 CLIENT_ID: env.CLIENT_ID,
                 DIALOG_ID: cmdChatId,
               }).catch((e) => console.error("imbot.sendtyping error:", e));
+              // Команда /статус — прямой ответ без Gemini
+              if (commandName === "статус") {
+                const check = (v) => (v ? "✅" : "❌");
+                await botReply(env, cmdChatId,
+                  `[B]Статус бота Алексей (Эверест)[/B]\n\n` +
+                  `• Gemini API: ${check(env.GEMINI_API_KEY)}\n` +
+                  `• Bitrix24: ${check(env.B24_PORTAL)}\n` +
+                  `• База данных: ${check(env.CATALOG)}\n` +
+                  `• История чатов: ${check(env.CHAT_HISTORY)}\n` +
+                  `• BOT_ID: ${env.BOT_ID || "❌"}\n\n` +
+                  `[I]Модель: ${env.GEMINI_MODEL || "gemini-2.5-flash"}[/I]`
+                );
+                return;
+              }
+
               const promptTemplates = {
                 "подшипник": `Найди подшипник по артикулу: ${commandParams}`,
                 "аналог": `Найди аналоги подшипника: ${commandParams}`,
@@ -1997,7 +2041,8 @@ export default {
             (isGroupChat
               ? `[I]В групповом чате реагирую на слова: подшипник, сделка, КП, цена, скидка, заказ, поставка, наличие, артикул...[/I]\n\n`
               : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`) +
-            `/сброс — очистить историю диалога`,
+            `/сброс — очистить историю диалога\n` +
+            `/статус — состояние бота и конфигурации`,
         );
         return json({ ok: true });
       }
