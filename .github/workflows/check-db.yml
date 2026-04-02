@@ -21,7 +21,7 @@ jobs:
           node-version: '24'
 
       - name: Install Wrangler
-        run: npm install -g wrangler@4.76.0
+        run: npm install -g wrangler@4.77.0
 
       - name: Query D1 table counts
         env:
