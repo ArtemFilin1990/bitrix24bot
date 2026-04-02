@@ -128,13 +128,14 @@ The entire bot logic in one file (~1,240 lines). Major sections:
 
 **Group chat filtering**: Bot only responds if message contains keywords like "подшипник", "сделка", "цена", "каталог", "заказ", etc., or the bot is @-mentioned.
 
-**Endpoints (12 total):**
+**Endpoints (13 total):**
 
 | Route | Method | Auth | Description |
 |---|---|---|---|
 | `/imbot` | POST | B24 signature | Main webhook for incoming Bitrix24 messages |
-| `/register` | GET | None | Register bot with Bitrix24 (run once after deploy) |
+| `/register` | GET | IMPORT_SECRET | Register bot with Bitrix24 (run once after deploy) |
 | `/reset` | POST | None | Clear a user's conversation history in KV |
+| `/status` | GET | IMPORT_SECRET | Health check: shows all config bindings and secret presence |
 | `/import-catalog` | GET | IMPORT_SECRET | Import semicolon-delimited CSV from Bitrix24 Disk |
 | `/import-catalog-csv` | GET | IMPORT_SECRET | Import extended CSV with auto-detected columns |
 | `/import-catalog-crm` | GET | IMPORT_SECRET | Import from Bitrix24 trade or CRM catalog iblock |
