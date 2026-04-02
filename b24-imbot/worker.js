@@ -291,8 +291,9 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
 }
 
 // Отправить сообщение от бота в чат
-async function botReply(env, chatId, text) {
-  console.log(`💬 botReply to ${chatId}:`, { textLength: text.length, textPreview: text.slice(0, 100) });
+async function botReply(env, chatId, text, botId = null) {
+  const effectiveBotId = botId || env.BOT_ID;
+  console.log(`💬 botReply to ${chatId}:`, { textLength: text.length, textPreview: text.slice(0, 100), effectiveBotId });
 
   // Валидация параметров
   if (!chatId) {
@@ -303,7 +304,7 @@ async function botReply(env, chatId, text) {
     console.error("❌ botReply: invalid text", { text: typeof text });
     throw new Error("botReply: text must be a non-empty string");
   }
-  if (!env.BOT_ID) {
+  if (!effectiveBotId) {
     console.error("❌ botReply: missing BOT_ID in environment");
     throw new Error("botReply: BOT_ID not configured");
   }
@@ -314,19 +315,19 @@ async function botReply(env, chatId, text) {
 
   try {
     const result = await b24(env, "imbot.message.add", {
-      BOT_ID: env.BOT_ID,
+      BOT_ID: effectiveBotId,
       CLIENT_ID: env.CLIENT_ID,
       DIALOG_ID: chatId,
       MESSAGE: text,
     });
-    console.log(`✅ botReply success:`, { chatId, messageId: result?.message_id || 'unknown' });
+    console.log(`✅ botReply success:`, { chatId, messageId: result?.message_id || 'unknown', effectiveBotId });
     return result;
   } catch (error) {
     console.error(`❌ botReply FAILED:`, {
       chatId,
       error: error.message,
       stack: error.stack,
-      BOT_ID: env.BOT_ID,
+      effectiveBotId,
       CLIENT_ID: env.CLIENT_ID?.slice(0, 10) + '...'
     });
     throw error; // Re-throw so caller can handle
@@ -1929,12 +1930,17 @@ export default {
       const chatId =
         data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
       const message = data["data[PARAMS][MESSAGE]"]?.trim();
+      // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
+      // которому адресовано сообщение (ID в чате может отличаться от env.BOT_ID)
+      const webhookBotId = data["data[BOT_ID]"] || env.BOT_ID;
 
       // Логирование входящего вебхука
       console.log("📨 Webhook received:", {
         event,
         userId,
         chatId,
+        webhookBotId,
+        envBotId: env.BOT_ID,
         messageLength: message?.length || 0,
         messagePreview: message?.slice(0, 50)
       });
@@ -1965,7 +1971,7 @@ export default {
           ctx.waitUntil((async () => {
             try {
               await b24(env, "imbot.sendtyping", {
-                BOT_ID: env.BOT_ID,
+                BOT_ID: webhookBotId,
                 CLIENT_ID: env.CLIENT_ID,
                 DIALOG_ID: cmdChatId,
               }).catch((e) => console.error("imbot.sendtyping error:", e));
@@ -1977,10 +1983,10 @@ export default {
               const history = await getHistory(env, cmdUserId, cmdChatId);
               const { text, history: newHistory } = await askGemini(env, history, prompt);
               await saveHistory(env, cmdUserId, cmdChatId, newHistory);
-              await botReply(env, cmdChatId, text);
+              await botReply(env, cmdChatId, text, webhookBotId);
             } catch (e) {
               console.error("❌ Error in slash command handler:", { error: e.message, commandName, cmdChatId });
-              await botReply(env, cmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.").catch(() => {});
+              await botReply(env, cmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
             }
           })());
         }
@@ -2068,6 +2074,7 @@ export default {
               ? `[I]В групповом чате реагирую на слова: подшипник, сделка, КП, цена, скидка, заказ, поставка, наличие, артикул...[/I]\n\n`
               : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`) +
             `/сброс — очистить историю диалога`,
+          webhookBotId,
         );
         return json({ ok: true });
       }
@@ -2079,7 +2086,7 @@ export default {
         if (safeUser && safeDialog) {
           await env.CHAT_HISTORY.delete(`history:${safeUser}:${safeDialog}`);
         }
-        ctx.waitUntil(botReply(env, chatId, "История диалога очищена ✅"));
+        ctx.waitUntil(botReply(env, chatId, "История диалога очищена ✅", webhookBotId));
         return json({ ok: true });
       }
 
@@ -2094,7 +2101,7 @@ export default {
             console.log("⌨️ Showing typing indicator...", { chatId });
             // Показать "печатает..." (imbot.sendtyping — официальный метод для ботов)
             await b24(env, "imbot.sendtyping", {
-              BOT_ID: env.BOT_ID,
+              BOT_ID: webhookBotId,
               CLIENT_ID: env.CLIENT_ID,
               DIALOG_ID: chatId,
             }).catch((e) => console.error("imbot.sendtyping error:", e));
@@ -2126,7 +2133,7 @@ export default {
               console.error("⚠️ Gemini returned empty response, using fallback", { chatId });
               const fallbackText = "Извините, не удалось сформировать ответ. Попробуйте переформулировать вопрос.";
               responseAttempted = true;
-              await botReply(env, chatId, fallbackText);
+              await botReply(env, chatId, fallbackText, webhookBotId);
               console.log("✅ Fallback reply sent successfully", { chatId });
               return;
             }
@@ -2137,7 +2144,7 @@ export default {
 
             console.log("📤 Sending bot reply...", { chatId, textLength: text.length });
             responseAttempted = true;
-            await botReply(env, chatId, text);
+            await botReply(env, chatId, text, webhookBotId);
             console.log("✅ Bot reply sent successfully", { chatId, userId });
           } catch (e) {
             // Не показывать сырые внутренние ошибки пользователю
@@ -2157,7 +2164,7 @@ export default {
 
             try {
               console.log("📤 Attempting to send error message to user...", { chatId });
-              await botReply(env, chatId, safeMessage);
+              await botReply(env, chatId, safeMessage, webhookBotId);
               console.log("✅ Error message sent to user", { chatId });
             } catch (replyErr) {
               console.error("❌ CRITICAL: Failed to send error reply:", {
