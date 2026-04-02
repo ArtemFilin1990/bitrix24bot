@@ -5,3 +5,4 @@
 #
 # Development / testing:
 pytest>=7.0
+PyYAML>=6.0
