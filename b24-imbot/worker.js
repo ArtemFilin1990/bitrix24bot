@@ -1005,7 +1005,7 @@ async function registerBot(env) {
   const workerUrl = `https://${env.WORKER_HOST}`;
   return await b24(env, "imbot.register", {
     CODE: "everest_ai_bot",
-    TYPE: "B", // Bot
+    TYPE: "S", // Supervisor — получает все сообщения из групповых чатов
     EVENT_HANDLER: `${workerUrl}/imbot`,
     OPENLINE: "N",
     CLIENT_ID: env.CLIENT_ID,
@@ -1016,6 +1016,40 @@ async function registerBot(env) {
       PERSONAL_WWW: "https://ewerest.ru",
     },
   });
+}
+
+// Регистрация слэш-команд бота (вызывается после registerBot)
+async function registerBotCommands(env) {
+  const workerUrl = `https://${env.WORKER_HOST}`;
+  const commands = [
+    {
+      COMMAND: "подшипник",
+      COMMON: "N",
+      HIDDEN: "N",
+      EXTRANET_SUPPORT: "N",
+      LANG: [{ LANGUAGE_ID: "ru", TITLE: "Найти подшипник по артикулу", PARAMS: "Артикул (например: 6205-2RS)" }],
+      EVENT_COMMAND_ADD: `${workerUrl}/imbot`,
+    },
+    {
+      COMMAND: "аналог",
+      COMMON: "N",
+      HIDDEN: "N",
+      EXTRANET_SUPPORT: "N",
+      LANG: [{ LANGUAGE_ID: "ru", TITLE: "Найти аналог подшипника", PARAMS: "Артикул (например: 180205)" }],
+      EVENT_COMMAND_ADD: `${workerUrl}/imbot`,
+    },
+  ];
+  const results = [];
+  for (const cmd of commands) {
+    results.push(
+      await b24(env, "imbot.command.register", {
+        BOT_ID: env.BOT_ID,
+        CLIENT_ID: env.CLIENT_ID,
+        ...cmd,
+      }).catch((e) => ({ error: e.message, command: cmd.COMMAND }))
+    );
+  }
+  return results;
 }
 
 // ── Main handler ──────────────────────────────────────────
@@ -1046,9 +1080,11 @@ export default {
       }
       try {
         const result = await registerBot(env);
+        const commands = await registerBotCommands(env);
         return json({
           ok: true,
           bot_id: result,
+          commands,
           note: "Сохрани BOT_ID в secrets: wrangler secret put BOT_ID",
         });
       } catch (e) {
@@ -1828,6 +1864,34 @@ export default {
         messagePreview: message?.slice(0, 50)
       });
 
+      // Обработка слэш-команд (/подшипник, /аналог)
+      if (event === "ONIMCOMMANDADD") {
+        const commandName = data["data[COMMAND][COMMAND]"] || data["data[PARAMS][COMMAND]"];
+        const commandParams = (data["data[COMMAND][COMMAND_PARAMS]"] || data["data[PARAMS][COMMAND_PARAMS]"] || "").trim();
+        const cmdChatId = data["data[PARAMS][DIALOG_ID]"] || data["data[USER][ID]"];
+        const cmdUserId = data["data[USER][ID]"];
+        console.log("⌨️ Slash command received:", { commandName, commandParams, cmdChatId, cmdUserId });
+        if (commandName && cmdChatId) {
+          ctx.waitUntil((async () => {
+            await b24(env, "imbot.sendtyping", {
+              BOT_ID: env.BOT_ID,
+              CLIENT_ID: env.CLIENT_ID,
+              DIALOG_ID: cmdChatId,
+            }).catch(() => {});
+            const prompt = commandName === "подшипник"
+              ? `Найди подшипник по артикулу: ${commandParams}`
+              : commandName === "аналог"
+              ? `Найди аналоги подшипника: ${commandParams}`
+              : commandParams;
+            const history = await getHistory(env, cmdUserId, cmdChatId);
+            const { text, history: newHistory } = await askGemini(env, history, prompt);
+            await saveHistory(env, cmdUserId, cmdChatId, newHistory);
+            await botReply(env, cmdChatId, text);
+          })());
+        }
+        return json({ ok: true });
+      }
+
       // Обработать только входящие сообщения боту
       if (event !== "ONIMBOTMESSAGEADD" || !message || !userId || !chatId) {
         console.log("⏭️ Webhook skipped:", { event, hasMessage: !!message, userId, chatId });
@@ -1933,10 +1997,12 @@ export default {
           let responseAttempted = false;
           try {
             console.log("⌨️ Showing typing indicator...", { chatId });
-            // Показать "печатает..."
-            await b24(env, "im.dialog.writing", { DIALOG_ID: chatId }).catch(
-              (e) => console.error("im.dialog.writing error:", e),
-            );
+            // Показать "печатает..." (imbot.sendtyping — официальный метод для ботов)
+            await b24(env, "imbot.sendtyping", {
+              BOT_ID: env.BOT_ID,
+              CLIENT_ID: env.CLIENT_ID,
+              DIALOG_ID: chatId,
+            }).catch((e) => console.error("imbot.sendtyping error:", e));
 
             console.log("📚 Loading conversation history...", { userId, chatId });
             const history = await getHistory(env, userId, chatId);
