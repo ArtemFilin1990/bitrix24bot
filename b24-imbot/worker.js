@@ -227,7 +227,7 @@ const TOOLS = [
 async function b24(env, method, params = {}) {
   const url = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${method}.json`;
   console.log(`🔗 B24 API call: ${method}`, { params: JSON.stringify(params).slice(0, 100) });
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -244,6 +244,46 @@ async function b24(env, method, params = {}) {
   }
   console.log(`✅ B24 ${method}: success`);
   return d.result;
+}
+
+function isPrivateIpAddress(hostname) {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) return false;
+  const parts = hostname.split(".").map((x) => parseInt(x, 10));
+  if (parts.some((x) => Number.isNaN(x) || x < 0 || x > 255)) return false;
+  const [a, b] = parts;
+  return (
+    a === 10 ||
+    a === 127 ||
+    a === 0 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+function validateImportUrl(value) {
+  if (!value) return { ok: false, error: "url required" };
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { ok: false, error: "Invalid url" };
+  }
+  if (parsed.protocol !== "https:") {
+    return { ok: false, error: "Only https URLs are allowed" };
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || isPrivateIpAddress(host)) {
+    return { ok: false, error: "Private or local URLs are forbidden" };
+  }
+  return { ok: true, url: parsed.toString() };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  if (!options.signal) {
+    return fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+  }
+  return fetch(url, options);
 }
 
 // Отправить сообщение от бота в чат
@@ -817,7 +857,7 @@ async function askGemini(env, history, userText) {
 
   for (let i = 0; i < 5; i++) {
     console.log(`🔄 Gemini iteration ${i + 1}/5`);
-    const r = await fetch(URL, {
+    const r = await fetchWithTimeout(URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1027,11 +1067,15 @@ export default {
       if (!fileId && !directUrl)
         return json({ error: "file_id or url required" }, 400);
       try {
+        if (directUrl) {
+          const validated = validateImportUrl(directUrl);
+          if (!validated.ok) return json({ error: validated.error }, 400);
+        }
         // Получаем download URL: напрямую или через Bitrix24 API
         const downloadUrl =
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
-        const csvResp = await fetch(downloadUrl);
+        const csvResp = await fetchWithTimeout(downloadUrl);
         if (!csvResp.ok) throw new Error(`Failed to download file: HTTP ${csvResp.status}`);
         const csvText = await csvResp.text();
 
@@ -1160,6 +1204,10 @@ export default {
       if (!fileId && !directUrl)
         return json({ error: "file_id or url required" }, 400);
       try {
+        if (directUrl) {
+          const validated = validateImportUrl(directUrl);
+          if (!validated.ok) return json({ error: validated.error }, 400);
+        }
         const meta = fileId
           ? await b24(env, "disk.file.get", { id: fileId })
           : null;
@@ -1169,7 +1217,7 @@ export default {
           (meta
             ? meta.NAME.replace(/_/g, " ").replace(/\.md$/i, "")
             : "Документ");
-        const resp = await fetch(downloadUrl);
+        const resp = await fetchWithTimeout(downloadUrl);
         if (!resp.ok) throw new Error(`Failed to download file: HTTP ${resp.status}`);
         const content = await resp.text();
         await upsertKnowledgeDocument(env, {
@@ -1197,10 +1245,14 @@ export default {
         return json({ error: "file_id or url required" }, 400);
       const sep = url.searchParams.get("sep") || ";";
       try {
+        if (directUrl) {
+          const validated = validateImportUrl(directUrl);
+          if (!validated.ok) return json({ error: validated.error }, 400);
+        }
         const downloadUrl =
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
-        const csvResp2 = await fetch(downloadUrl);
+        const csvResp2 = await fetchWithTimeout(downloadUrl);
         if (!csvResp2.ok) throw new Error(`Failed to download file: HTTP ${csvResp2.status}`);
         const text = await csvResp2.text();
         const lines = text
@@ -1419,7 +1471,7 @@ export default {
           }
 
           const apiUrl = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${endpoint}.json`;
-          const resp = await fetch(apiUrl, {
+          const resp = await fetchWithTimeout(apiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -1553,10 +1605,14 @@ export default {
       if (!fileId && !directUrl)
         return json({ error: "file_id or url required" }, 400);
       try {
+        if (directUrl) {
+          const validated = validateImportUrl(directUrl);
+          if (!validated.ok) return json({ error: validated.error }, 400);
+        }
         const downloadUrl =
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
-        const previewResp = await fetch(downloadUrl);
+        const previewResp = await fetchWithTimeout(downloadUrl);
         if (!previewResp.ok) throw new Error(`Failed to download file: HTTP ${previewResp.status}`);
         const text = await previewResp.text();
         const lines = text
@@ -1581,10 +1637,14 @@ export default {
         return json({ error: "file_id or url required" }, 400);
       const sep = url.searchParams.get("sep") || ";";
       try {
+        if (directUrl) {
+          const validated = validateImportUrl(directUrl);
+          if (!validated.ok) return json({ error: validated.error }, 400);
+        }
         const downloadUrl =
           directUrl ||
           (await b24(env, "disk.file.get", { id: fileId })).DOWNLOAD_URL;
-        const analogsResp = await fetch(downloadUrl);
+        const analogsResp = await fetchWithTimeout(downloadUrl);
         if (!analogsResp.ok) throw new Error(`Failed to download file: HTTP ${analogsResp.status}`);
         const text = await analogsResp.text();
         const lines = text
@@ -1746,7 +1806,10 @@ export default {
       // Валидация токена приложения (защита от неавторизованных запросов)
       const appToken = data["auth[application_token]"];
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
-        console.error("Webhook rejected: invalid app token", { appToken: appToken?.slice(0, 10) + '...', expected: env.B24_APP_TOKEN?.slice(0, 10) + '...' });
+        console.error("Webhook rejected: invalid app token", {
+          appToken: appToken?.slice(0, 10) + "...",
+          tokenPresent: !!appToken,
+        });
         return json({ error: "Forbidden: Invalid application token" }, 403);
       }
 
