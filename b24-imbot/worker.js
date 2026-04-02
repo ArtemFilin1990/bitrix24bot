@@ -1866,10 +1866,25 @@ export default {
 
       // Обработка слэш-команд (/подшипник, /аналог)
       if (event === "ONIMCOMMANDADD") {
-        const commandName = data["data[COMMAND][COMMAND]"] || data["data[PARAMS][COMMAND]"];
-        const commandParams = (data["data[COMMAND][COMMAND_PARAMS]"] || data["data[PARAMS][COMMAND_PARAMS]"] || "").trim();
-        const cmdChatId = data["data[PARAMS][DIALOG_ID]"] || data["data[USER][ID]"];
+        // Bitrix24 sends command data under an indexed key:
+        // data[COMMAND][<id>][COMMAND], data[COMMAND][<id>][COMMAND_PARAMS], etc.
+        let commandName = null;
+        let commandParams = "";
+        let cmdChatId = data["data[PARAMS][DIALOG_ID]"];
         const cmdUserId = data["data[USER][ID]"];
+
+        // Find the indexed command entry: data[COMMAND][<id>][COMMAND]
+        const cmdKey = Object.keys(data).find((k) => /^data\[COMMAND\]\[\d+\]\[COMMAND\]$/.test(k));
+        if (cmdKey) {
+          const cmdIdMatch = cmdKey.match(/^data\[COMMAND\]\[(\d+)\]\[COMMAND\]$/);
+          if (cmdIdMatch) {
+            const cmdId = cmdIdMatch[1];
+            commandName = data[`data[COMMAND][${cmdId}][COMMAND]`] || null;
+            commandParams = (data[`data[COMMAND][${cmdId}][COMMAND_PARAMS]`] || "").trim();
+            cmdChatId = data[`data[COMMAND][${cmdId}][DIALOG_ID]`] || cmdChatId;
+          }
+        }
+
         console.log("⌨️ Slash command received:", { commandName, commandParams, cmdChatId, cmdUserId });
         if (commandName && cmdChatId) {
           ctx.waitUntil((async () => {
