@@ -31,7 +31,7 @@ log_error() {
 if ! command -v wrangler &> /dev/null; then
     log_error "Wrangler не установлен"
     log_info "Установка wrangler..."
-    npm install -g wrangler@4.76.0
+    npm install -g wrangler@4.77.0
     log_success "Wrangler установлен"
 fi
 

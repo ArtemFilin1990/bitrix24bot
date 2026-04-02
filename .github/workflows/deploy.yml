@@ -34,7 +34,7 @@ jobs:
           ls -la b24-imbot/worker.js
 
       - name: Install Wrangler
-        run: npm install -g wrangler@4.76.0
+        run: npm install -g wrangler@4.77.0
 
       - name: Deploy Worker
         run: wrangler deploy

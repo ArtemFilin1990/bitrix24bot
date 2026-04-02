@@ -435,6 +435,106 @@ describe('Built-in commands in personal chat', () => {
   });
 });
 
+// ── ONIMCOMMANDADD slash-command handling ─────────────────────────────────────
+
+describe('ONIMCOMMANDADD slash-command handling', () => {
+  // Helper: build the real Bitrix24 indexed ONIMCOMMANDADD payload
+  // data[COMMAND][<id>][COMMAND], data[COMMAND][<id>][COMMAND_PARAMS], etc.
+  function makeCommandRequest(command, params = '', dialogId = '42', cmdId = '1') {
+    return makeImbotRequest({
+      event:                                      'ONIMCOMMANDADD',
+      'data[USER][ID]':                           '42',
+      'data[PARAMS][DIALOG_ID]':                  dialogId,
+      [`data[COMMAND][${cmdId}][COMMAND]`]:        command,
+      [`data[COMMAND][${cmdId}][COMMAND_PARAMS]`]: params,
+      [`data[COMMAND][${cmdId}][DIALOG_ID]`]:      dialogId,
+    });
+  }
+
+  it('returns {ok:true} immediately and enqueues background work', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeCommandRequest('подшипник', '6205-2RS'),
+        makeEnv(),
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).ok).toBe(true);
+      await ctx._flush();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('calls imbot.sendtyping and imbot.message.add for /подшипник command', async () => {
+    const mockFetch = makeApiFetchMock('Подшипник 6205-2RS найден');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(makeCommandRequest('подшипник', '6205-2RS'), makeEnv(), ctx);
+      await ctx._flush();
+
+      const b24Calls = mockFetch.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => !url.includes('generativelanguage'));
+
+      expect(b24Calls.some((url) => url.includes('imbot.sendtyping'))).toBe(true);
+      expect(b24Calls.some((url) => url.includes('imbot.message.add'))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('calls Gemini API with the correct prompt for /аналог command', async () => {
+    const mockFetch = makeApiFetchMock('Аналог найден');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(makeCommandRequest('аналог', '180205'), makeEnv(), ctx);
+      await ctx._flush();
+
+      const geminiCalls = mockFetch.mock.calls.filter(([url]) =>
+        String(url).includes('generativelanguage.googleapis.com'),
+      );
+      expect(geminiCalls.length).toBeGreaterThan(0);
+      const promptText = JSON.stringify(JSON.parse(geminiCalls[0][1].body));
+      expect(promptText).toContain('180205');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('ignores ONIMCOMMANDADD with no indexed command key (empty payload)', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event:             'ONIMCOMMANDADD',
+          'data[USER][ID]':  '42',
+          // no data[COMMAND][<id>][COMMAND] key at all
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+      expect(res.status).toBe(200);
+      expect((await res.json()).ok).toBe(true);
+      expect(mockFetch.mock.calls.length).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 // ── sanitizeUserId (tested indirectly via /reset) ─────────────────────────────
 
 describe('sanitizeUserId behaviour', () => {
