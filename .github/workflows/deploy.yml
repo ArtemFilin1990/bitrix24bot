@@ -36,6 +36,54 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler@4.77.0
 
+      - name: Validate required deployment secrets
+        run: |
+          missing=0
+
+          for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID GEMINI_API_KEY B24_PORTAL B24_USER_ID B24_TOKEN IMPORT_SECRET WORKER_HOST; do
+            if [ -z "${!var}" ]; then
+              echo "::error title=Missing required secret::${var} is unset or empty."
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          B24_PORTAL: ${{ secrets.B24_PORTAL }}
+          B24_USER_ID: ${{ secrets.B24_USER_ID }}
+          B24_TOKEN: ${{ secrets.B24_TOKEN }}
+          IMPORT_SECRET: ${{ secrets.IMPORT_SECRET }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+
+      - name: Set Worker secrets
+        run: |
+          printf '%s' "$GEMINI_API_KEY" | wrangler secret put GEMINI_API_KEY
+          printf '%s' "$B24_PORTAL"     | wrangler secret put B24_PORTAL
+          printf '%s' "$B24_USER_ID"    | wrangler secret put B24_USER_ID
+          printf '%s' "$B24_TOKEN"      | wrangler secret put B24_TOKEN
+          if [ -n "$B24_APP_TOKEN" ]; then
+            printf '%s' "$B24_APP_TOKEN" | wrangler secret put B24_APP_TOKEN
+          else
+            echo "B24_APP_TOKEN is empty; skipping optional Worker secret."
+          fi
+          printf '%s' "$IMPORT_SECRET"  | wrangler secret put IMPORT_SECRET
+          printf '%s' "$WORKER_HOST"    | wrangler secret put WORKER_HOST
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cf_token || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          B24_PORTAL: ${{ secrets.B24_PORTAL }}
+          B24_USER_ID: ${{ secrets.B24_USER_ID }}
+          B24_TOKEN: ${{ secrets.B24_TOKEN }}
+          B24_APP_TOKEN: ${{ secrets.B24_APP_TOKEN }}
+          IMPORT_SECRET: ${{ secrets.IMPORT_SECRET }}
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+
       - name: Deploy Worker
         run: wrangler deploy
         env:
