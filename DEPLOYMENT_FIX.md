@@ -30,7 +30,7 @@ The repository includes a GitHub Actions workflow (`.github/workflows/deploy.yml
 3. The workflow will:
    - Checkout the code
    - Verify wrangler.toml and worker.js exist
-   - Install wrangler@4.76.0
+   - Install wrangler@4.77.0
    - Deploy using `wrangler deploy`
 
 ### Option 2: Manual Deployment

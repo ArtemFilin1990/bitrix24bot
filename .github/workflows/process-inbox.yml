@@ -44,7 +44,7 @@ jobs:
 
       - name: Install Wrangler
         if: steps.check.outputs.count != '0'
-        run: npm install -g wrangler@4.76.0
+        run: npm install -g wrangler@4.77.0
 
       - name: Apply SQL to D1
         if: steps.check.outputs.count != '0'

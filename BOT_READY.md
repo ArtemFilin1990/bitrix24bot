@@ -49,7 +49,7 @@
 
 3. Установите секреты Bitrix24 через Wrangler CLI:
 ```bash
-npm install -g wrangler@4.76.0
+npm install -g wrangler@4.77.0
 export CLOUDFLARE_API_TOKEN=ваш-токен
 export CLOUDFLARE_ACCOUNT_ID=ваш-account-id
 
@@ -84,7 +84,7 @@ GitHub → Actions → "Seed Database" → Run workflow
 
 ```bash
 # 1. Установите Wrangler
-npm install -g wrangler@4.76.0
+npm install -g wrangler@4.77.0
 
 # 2. Авторизуйтесь в Cloudflare
 wrangler login
