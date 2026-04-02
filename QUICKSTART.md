@@ -60,6 +60,9 @@ wrangler login
 и запрашивает все необходимые секреты:
 
 ```bash
+# (опционально) укажите размещение D1 до запуска setup:
+# export D1_LOCATION=weur         # location hint
+# export D1_JURISDICTION=eu       # приоритетнее location, если задан
 ./run-bot.sh setup
 ```
 
