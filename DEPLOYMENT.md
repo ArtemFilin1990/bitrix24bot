@@ -45,10 +45,10 @@
 - Node.js 24+
 - Python 3.9+
 - Git
-- Wrangler CLI 4.76.0
+- Wrangler CLI 4.77.0
 
 ```bash
-npm install -g wrangler@4.76.0
+npm install -g wrangler@4.77.0
 ```
 
 ### 3. Bitrix24 Portal

@@ -48,7 +48,7 @@ GitHub → Actions → Seed Database → Run workflow
 
 ```bash
 # Установите Wrangler
-npm install -g wrangler@4.76.0
+npm install -g wrangler@4.77.0
 
 # Авторизуйтесь в Cloudflare
 wrangler login

@@ -95,7 +95,7 @@ Bindings: CHAT_HISTORY (KV), CATALOG (D1), BOT_ID, CLIENT_ID
 ```bash
 ✅ .github/workflows/deploy.yml
 - Проверка конфигурации
-- Установка wrangler@4.76.0
+- Установка wrangler@4.77.0
 - Развертывание worker
 ```
 
@@ -138,7 +138,7 @@ Bindings: CHAT_HISTORY (KV), CATALOG (D1), BOT_ID, CLIENT_ID
 
 ```bash
 # 1. Установите wrangler
-npm install -g wrangler@4.76.0
+npm install -g wrangler@4.77.0
 
 # 2. Авторизуйтесь
 wrangler login

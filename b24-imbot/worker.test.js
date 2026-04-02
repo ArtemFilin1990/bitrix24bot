@@ -480,6 +480,125 @@ describe('Built-in commands in personal chat', () => {
   });
 });
 
+// ── ONIMCOMMANDADD slash-command handling ─────────────────────────────────────
+
+describe('ONIMCOMMANDADD slash-command handling', () => {
+  it('returns {ok:true} immediately and enqueues background work', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event:                              'ONIMCOMMANDADD',
+          'data[USER][ID]':                   '42',
+          'data[PARAMS][DIALOG_ID]':          '42',
+          'data[COMMAND][COMMAND]':           'подшипник',
+          'data[COMMAND][COMMAND_PARAMS]':    '6205-2RS',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).ok).toBe(true);
+      // Background work must have been enqueued
+      await ctx._flush();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('calls imbot.sendtyping and imbot.message.add for /подшипник command', async () => {
+    const mockFetch = makeApiFetchMock('Подшипник 6205-2RS найден');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                              'ONIMCOMMANDADD',
+          'data[USER][ID]':                   '42',
+          'data[PARAMS][DIALOG_ID]':          '42',
+          'data[COMMAND][COMMAND]':           'подшипник',
+          'data[COMMAND][COMMAND_PARAMS]':    '6205-2RS',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const b24Calls = mockFetch.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => !url.includes('generativelanguage'));
+
+      const sentTyping = b24Calls.some((url) => url.includes('imbot.sendtyping'));
+      const sentMessage = b24Calls.some((url) => url.includes('imbot.message.add'));
+      expect(sentTyping).toBe(true);
+      expect(sentMessage).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('calls Gemini API with the correct prompt for /аналог command', async () => {
+    const mockFetch = makeApiFetchMock('Аналог найден');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                              'ONIMCOMMANDADD',
+          'data[USER][ID]':                   '42',
+          'data[PARAMS][DIALOG_ID]':          '42',
+          'data[COMMAND][COMMAND]':           'аналог',
+          'data[COMMAND][COMMAND_PARAMS]':    '180205',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const geminiCalls = mockFetch.mock.calls.filter(([url]) =>
+        String(url).includes('generativelanguage.googleapis.com'),
+      );
+      expect(geminiCalls.length).toBeGreaterThan(0);
+      // Prompt must reference the analog search
+      const body = JSON.parse(geminiCalls[0][1].body);
+      const promptText = JSON.stringify(body);
+      expect(promptText).toContain('180205');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('ignores ONIMCOMMANDADD without commandName or chatId', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event:             'ONIMCOMMANDADD',
+          'data[USER][ID]':  '42',
+          // no command name, no dialog_id
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+      expect(res.status).toBe(200);
+      expect((await res.json()).ok).toBe(true);
+      // No Gemini or B24 calls should have been made
+      expect(mockFetch.mock.calls.length).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 // ── sanitizeUserId (tested indirectly via /reset) ─────────────────────────────
 
 describe('sanitizeUserId behaviour', () => {
