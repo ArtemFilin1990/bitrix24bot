@@ -1006,7 +1006,7 @@ async function registerBot(env) {
   // Используем imbot.v2.Bot.register (актуальный API)
   const result = await b24(env, "imbot.v2.Bot.register", {
     fields: {
-      code: "everest_ai_bot",
+      code: "everest_imbot_v2",
       botToken: env.B24_APP_TOKEN,
       properties: {
         name: "ИИ-помощник Эверест",
