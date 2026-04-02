@@ -1077,11 +1077,11 @@ export default {
         return json({ error: "Forbidden" }, 403);
       }
       try {
-        // Удаляем старого бота перед перерегистрацией (игнорируем ошибки)
+        // Удаляем старого бота через старый API (imbot.unregister знает CLIENT_ID)
         if (env.BOT_ID) {
-          await b24(env, "imbot.v2.Bot.unregister", {
-            botId: parseInt(env.BOT_ID),
-            botToken: env.B24_APP_TOKEN,
+          await b24(env, "imbot.unregister", {
+            BOT_ID: parseInt(env.BOT_ID),
+            CLIENT_ID: env.CLIENT_ID,
           }).catch(() => {});
         }
         const result = await registerBot(env);
