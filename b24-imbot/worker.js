@@ -1019,7 +1019,9 @@ async function registerBot(env) {
 }
 
 // Регистрация слэш-команд бота (вызывается после registerBot)
-async function registerBotCommands(env) {
+// botId — ID только что созданного бота (из результата imbot.register)
+async function registerBotCommands(env, botId) {
+  const effectiveBotId = botId || env.BOT_ID;
   const workerUrl = `https://${env.WORKER_HOST}`;
   const commands = [
     {
@@ -1039,17 +1041,15 @@ async function registerBotCommands(env) {
       EVENT_COMMAND_ADD: `${workerUrl}/imbot`,
     },
   ];
-  const results = [];
-  for (const cmd of commands) {
-    results.push(
-      await b24(env, "imbot.command.register", {
-        BOT_ID: env.BOT_ID,
+  return Promise.all(
+    commands.map((cmd) =>
+      b24(env, "imbot.command.register", {
+        BOT_ID: effectiveBotId,
         CLIENT_ID: env.CLIENT_ID,
         ...cmd,
       }).catch((e) => ({ error: e.message, command: cmd.COMMAND }))
-    );
-  }
-  return results;
+    )
+  );
 }
 
 // ── Main handler ──────────────────────────────────────────
@@ -1080,7 +1080,7 @@ export default {
       }
       try {
         const result = await registerBot(env);
-        const commands = await registerBotCommands(env);
+        const commands = await registerBotCommands(env, result);
         return json({
           ok: true,
           bot_id: result,
@@ -1873,20 +1873,25 @@ export default {
         console.log("⌨️ Slash command received:", { commandName, commandParams, cmdChatId, cmdUserId });
         if (commandName && cmdChatId) {
           ctx.waitUntil((async () => {
-            await b24(env, "imbot.sendtyping", {
-              BOT_ID: env.BOT_ID,
-              CLIENT_ID: env.CLIENT_ID,
-              DIALOG_ID: cmdChatId,
-            }).catch(() => {});
-            const prompt = commandName === "подшипник"
-              ? `Найди подшипник по артикулу: ${commandParams}`
-              : commandName === "аналог"
-              ? `Найди аналоги подшипника: ${commandParams}`
-              : commandParams;
-            const history = await getHistory(env, cmdUserId, cmdChatId);
-            const { text, history: newHistory } = await askGemini(env, history, prompt);
-            await saveHistory(env, cmdUserId, cmdChatId, newHistory);
-            await botReply(env, cmdChatId, text);
+            try {
+              await b24(env, "imbot.sendtyping", {
+                BOT_ID: env.BOT_ID,
+                CLIENT_ID: env.CLIENT_ID,
+                DIALOG_ID: cmdChatId,
+              }).catch((e) => console.error("imbot.sendtyping error:", e));
+              const promptTemplates = {
+                "подшипник": `Найди подшипник по артикулу: ${commandParams}`,
+                "аналог": `Найди аналоги подшипника: ${commandParams}`,
+              };
+              const prompt = promptTemplates[commandName] || commandParams;
+              const history = await getHistory(env, cmdUserId, cmdChatId);
+              const { text, history: newHistory } = await askGemini(env, history, prompt);
+              await saveHistory(env, cmdUserId, cmdChatId, newHistory);
+              await botReply(env, cmdChatId, text);
+            } catch (e) {
+              console.error("❌ Error in slash command handler:", { error: e.message, commandName, cmdChatId });
+              await botReply(env, cmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.").catch(() => {});
+            }
           })());
         }
         return json({ ok: true });
