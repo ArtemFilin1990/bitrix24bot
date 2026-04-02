@@ -33,18 +33,37 @@ bitrix24bot/
 │   │   └── inbox/              # Sample inbox files (docs, catalog, analogs, brands)
 │   ├── test_build_bearings_seed.py
 │   ├── test_build_kb_seed.py
-│   └── test_process_inbox.py
+│   ├── test_process_inbox.py
+│   ├── test_classify.py        # KB document classification logic tests
+│   └── test_utils.py           # Shared utility function tests (sql_quote, CSV helpers, etc.)
 ├── inbox/
 │   ├── catalog/           # Drop CSV files here to import into catalog table
 │   ├── analogs/           # Drop CSV files here to import analog mappings
 │   ├── brands/            # Drop CSV files here to import brand metadata
 │   └── docs/              # Drop Markdown files here to import into knowledge base
+│                          # (currently contains 150+ committed Russian-language KB docs)
 ├── schema.sql             # D1 database schema reference (deprecated — use migrations/)
 ├── migrations/
 │   └── 0001_initial.sql   # Initial D1 migration (canonical schema source)
-├── requirements.txt       # Python dependencies (pytest for tests)
+├── requirements.txt       # Python dependencies (pytest, PyYAML)
+├── package.json           # Node.js config with npm scripts (test, verify, deploy)
+├── vitest.config.js       # Vitest configuration for worker tests
 ├── wrangler.toml          # Wrangler config (single source of truth)
-├── SITEMAP.md             # Repository navigation guide
+├── verify-worker.mjs      # Worker structure and security verification
+├── verify-schema.mjs      # D1 schema validation
+├── verify-gemini-db-integration.mjs  # Gemini/DB integration verification
+├── test-webhook.js        # Bitrix24 webhook payload simulation for local testing
+├── run-bot.sh             # Automated deployment helper script (gitignored)
+├── SITEMAP.md             # Flat list of knowledge-base document paths (KB sitemap)
+├── QUICKSTART.md          # 5-minute setup guide
+├── DEPLOYMENT.md          # Deployment procedures
+├── DEPLOYMENT_FIX.md      # Deployment issue resolutions
+├── REGISTRATION_GUIDE.md  # Bot registration walkthrough
+├── TROUBLESHOOTING.md     # Troubleshooting guide
+├── BITRIX24_CONFIGURATION.md  # Bitrix24 bot parameter documentation
+├── GEMINI_DATABASE_INTEGRATION.md  # Gemini/DB integration details
+├── BOT_READY.md           # Deployment readiness checklist
+├── BOT_STATUS.md          # Current bot status report
 └── .github/workflows/
     ├── deploy.yml         # CI/CD: push to main (non-inbox) → deploy to Cloudflare Workers
     ├── process-inbox.yml  # CI/CD: push to main (inbox/ changes) → process files into D1
@@ -52,7 +71,7 @@ bitrix24bot/
     └── check-db.yml       # Manual: query D1 table counts and last ingest timestamps
 ```
 
-The repository root also contains 100+ Markdown reference documents covering GOST/ISO bearing standards, bearing types, manufacturers, and technical specifications.
+The repository root also contains 100+ Markdown reference documents covering GOST/ISO bearing standards, bearing types, manufacturers, and technical specifications, plus operational guides for deployment, configuration, and troubleshooting.
 
 ---
 
@@ -210,16 +229,63 @@ After processing, the CI workflow auto-deletes the processed files and commits w
 ### Running Tests
 
 ```bash
+# Python tests (seed scripts and data pipelines)
 cd /path/to/bitrix24bot
 python -m pytest tests/ -v
+# or via npm:
+npm run test:python
+
+# JavaScript tests (worker.js via Vitest)
+npm test
 ```
 
-Tests use in-memory SQLite (`:memory:`) — no Cloudflare account or D1 required. All fixtures are in `tests/fixtures/`.
+Python tests use in-memory SQLite (`:memory:`) — no Cloudflare account or D1 required. All fixtures are in `tests/fixtures/`.
 
-Test files:
+Python test files:
 - `tests/test_build_bearings_seed.py` — verifies catalog/analog/brand counts and idempotency
 - `tests/test_build_kb_seed.py` — verifies document classification, FTS indexing, and idempotency
 - `tests/test_process_inbox.py` — verifies inbox/ processing for docs, catalog, analogs, brands, and FTS
+- `tests/test_classify.py` — verifies KB document classification rules (path → type/canonical mapping)
+- `tests/test_utils.py` — verifies shared utilities: `sql_quote()`, `parse_frontmatter()`, CSV helpers
+
+### Verification Scripts
+
+Three Node.js verification scripts validate the worker and database independently of tests:
+
+```bash
+# Verify worker structure and security rules
+node verify-worker.mjs
+
+# Validate D1 schema definitions
+node verify-schema.mjs
+
+# Check Gemini function-calling and DB integration
+node verify-gemini-db-integration.mjs
+
+# Run all verifications in one pass
+npm run verify
+```
+
+### npm Scripts
+
+| Script | Purpose |
+|---|---|
+| `npm test` | Run Vitest tests for worker.js |
+| `npm run test:python` | Run Python test suite via pytest |
+| `npm run verify` | Run all 3 verify-*.mjs scripts |
+| `npm run verify:worker` | Worker structure check only |
+| `npm run verify:schema` | Schema validation only |
+| `npm run verify:gemini` | Gemini/DB integration check only |
+| `npm run audit` | Full quality gate: Vitest + all verifications |
+| `npm run deploy` | Deploy worker via `wrangler deploy` |
+| `npm run deploy:versions` | Upload new version without promoting traffic |
+
+### Webhook Testing
+
+```bash
+# Simulate Bitrix24 webhook payload locally
+node test-webhook.js
+```
 
 ### Deploying the Worker
 
@@ -291,7 +357,7 @@ Must be done once after initial deployment.
 ### Python (scripts/)
 
 - **Python 3.9+** compatible; use `pathlib`, `dataclasses`, `argparse`, `csv`, `hashlib`, `json`.
-- No third-party dependencies — stdlib only.
+- Third-party: `PyYAML>=6.0` (for YAML frontmatter parsing in KB docs). All other scripts use stdlib only. `requirements.txt` lists `pytest>=7.0` and `PyYAML>=6.0`.
 - **Idempotency is critical**: all seeds must be safe to re-run. Use `DELETE WHERE source_repo=...` before re-inserting.
 - **SQL escaping**: use the project's `sql_quote()` / `sql_value()` helpers — do not use f-strings directly for SQL values.
 - **CSV reading**: always use `read_csv()` / `_read_csv()` helpers (handles UTF-8 BOM, semicolon/comma delimiters).
@@ -330,7 +396,7 @@ Must be done once after initial deployment.
 | `seed-database.yml` | Push to `main` (own file changes) or `workflow_dispatch` | Apply D1 migrations, clone & seed BearingsInfo + knowledge-base, register bot |
 | `check-db.yml` | `workflow_dispatch` only | Query D1 row counts and last ingest audit rows (read-only diagnostic) |
 
-All workflows use `wrangler@4.76.0` and Node.js 24. `deploy.yml` and `seed-database.yml` accept an optional `cf_token` input to override `secrets.CLOUDFLARE_API_TOKEN`.
+All workflows use `wrangler@4.77.0` and Node.js 24. `deploy.yml` and `seed-database.yml` accept an optional `cf_token` input to override `secrets.CLOUDFLARE_API_TOKEN`.
 
 ---
 
