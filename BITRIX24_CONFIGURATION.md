@@ -88,27 +88,32 @@ npx wrangler whoami
 
 ### Создание базы
 
+База данных уже описана в `wrangler.toml` как `bearings-catalog` с binding `CATALOG`. Если создаёте с нуля:
+
 ```bash
-npx wrangler d1 create bitrix24bot-db
+npx wrangler d1 create bearings-catalog
 ```
 
-Добавьте binding в `wrangler.toml`:
+В `wrangler.toml` это выглядит так (уже настроено в проекте):
 
 ```toml
 [[d1_databases]]
-binding = "DB"
-database_name = "bitrix24bot-db"
+binding = "CATALOG"
+database_name = "bearings-catalog"
 database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+migrations_dir = "migrations"
 ```
 
-### Применение схемы
+### Применение миграций
+
+В проекте настроен `migrations_dir = "migrations"` — всегда используйте `wrangler d1 migrations apply`:
 
 ```bash
 # Локально
-npx wrangler d1 execute bitrix24bot-db --local --file=./schema.sql
+npx wrangler d1 migrations apply bearings-catalog
 
 # Продакшн
-npx wrangler d1 execute bitrix24bot-db --remote --file=./schema.sql
+npx wrangler d1 migrations apply bearings-catalog --remote
 ```
 
 ---
@@ -116,41 +121,42 @@ npx wrangler d1 execute bitrix24bot-db --remote --file=./schema.sql
 ## 4) Создание Cloudflare KV namespace
 
 ```bash
-npx wrangler kv namespace create CACHE
+npx wrangler kv namespace create CHAT_HISTORY
 ```
 
-Добавьте в `wrangler.toml`:
+В `wrangler.toml` это выглядит так (уже настроено в проекте):
 
 ```toml
 [[kv_namespaces]]
-binding = "CACHE"
-id = "06779da6940b431db6e566b4846d64db"
+binding = "CHAT_HISTORY"
+id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
 Использование в коде:
 
-- `env.CACHE.get(key)`
-- `env.CACHE.put(key, value)`
+- `env.CHAT_HISTORY.get(key)`
+- `env.CHAT_HISTORY.put(key, value)`
 
 ### Пример `wrangler.toml`
 
 ```toml
 name = "bitrix24bot"
-main = "src/index.ts"
-compatibility_date = "2025-04-01"
-compatibility_flags = ["nodejs_compat"]
-
-[[d1_databases]]
-binding = "DB"
-database_name = "bitrix24bot-db"
-database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+main = "b24-imbot/worker.js"
+compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
-binding = "CACHE"
-id = "06779da6940b431db6e566b4846d64db"
+binding = "CHAT_HISTORY"
+id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "bearings-catalog"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+migrations_dir = "migrations"
 
 [vars]
-BOT_NAME = "ИИ-помощник Эверест"
+BOT_ID    = "0"
+CLIENT_ID = "your_client_id"
 GEMINI_MODEL = "gemini-2.5-flash"
 ```
 
@@ -193,10 +199,16 @@ https://<portal>.bitrix24.ru/rest/1/<token>/
 
 ## 7) Установка секретов через Wrangler
 
+Воркер читает следующие секреты (имена должны совпадать точно):
+
 ```bash
-npx wrangler secret put GEMINI_API_KEY
-npx wrangler secret put BITRIX24_WEBHOOK_URL
-npx wrangler secret put BITRIX24_CLIENT_ID
+npx wrangler secret put GEMINI_API_KEY      # Google Gemini API ключ
+npx wrangler secret put B24_PORTAL          # URL портала: https://<portal>.bitrix24.ru
+npx wrangler secret put B24_USER_ID         # ID пользователя REST-вебхука
+npx wrangler secret put B24_TOKEN           # Токен REST-вебхука
+npx wrangler secret put B24_APP_TOKEN       # Токен приложения (обязателен для /register)
+npx wrangler secret put IMPORT_SECRET       # Секрет для защиты admin-эндпоинтов
+npx wrangler secret put WORKER_HOST         # Домен воркера (без https://), напр.: bitrix24bot.workers.dev
 ```
 
 Проверка:
@@ -209,8 +221,12 @@ npx wrangler secret list
 
 ```env
 GEMINI_API_KEY=AIza...your_key
-BITRIX24_WEBHOOK_URL=https://<portal>.bitrix24.ru/rest/1/<token>/
-BITRIX24_CLIENT_ID=everest_bot_client_001
+B24_PORTAL=https://<portal>.bitrix24.ru
+B24_USER_ID=1
+B24_TOKEN=<rest_webhook_token>
+B24_APP_TOKEN=<app_token>
+IMPORT_SECRET=<your_import_secret>
+WORKER_HOST=bitrix24bot.workers.dev
 ```
 
 Убедитесь, что `.dev.vars` в `.gitignore`.
@@ -226,16 +242,17 @@ npm install
 npx wrangler deploy
 ```
 
-После деплоя выполните миграции в удалённой D1:
+После деплоя примените миграции в удалённой D1:
 
 ```bash
-npx wrangler d1 execute bitrix24bot-db --remote --file=./schema.sql
+npx wrangler d1 migrations apply bearings-catalog --remote
 ```
 
 Проверки:
 
 ```bash
-curl https://<worker>.workers.dev
+# Проверка статуса воркера (endpoint защищён секретом)
+curl "https://<worker>.workers.dev/status?secret=<IMPORT_SECRET>"
 npx wrangler tail
 npx wrangler versions list
 ```
@@ -245,20 +262,21 @@ npx wrangler versions list
 ## 9) Регистрация бота в Bitrix24 через `/register`
 
 ```bash
-curl -X POST https://<worker>.workers.dev/register
+curl "https://<worker>.workers.dev/register?secret=<IMPORT_SECRET>"
 ```
 
-Ожидаемо внутри вызывается `imbot.register` на вашем Bitrix24 webhook URL.
+Endpoint защищён `IMPORT_SECRET` и требует GET-запроса с query-параметром `secret`.
 
-Ключевые параметры регистрации:
+Внутри вызывается `imbot.v2.Bot.register` — для этого **обязателен** секрет `B24_APP_TOKEN`.
 
-- `CODE=everest_bot`
-- `TYPE=B`
-- `EVENT_HANDLER=https://<worker>.workers.dev/webhook`
-- `CLIENT_ID=everest_bot_client_001`
-- `PROPERTIES[NAME]=ИИ-помощник Эверест`
+Ключевые параметры регистрации (из кода воркера):
 
-В ответе приходит числовой `BOT_ID`, который нужно сохранить (например, в KV).
+- Код бота: `everest_imbot_v2`
+- Webhook: `https://<WORKER_HOST>/imbot`
+- Токен: `B24_APP_TOKEN`
+- Автоматически регистрируются команды: `/подшипник`, `/аналог`, `/статус`
+
+В ответе приходит числовой `BOT_ID`, который нужно сохранить в `wrangler.toml` в секции `[vars]` (`BOT_ID`).
 
 ---
 
@@ -266,8 +284,10 @@ curl -X POST https://<worker>.workers.dev/register
 
 ### Проверка endpoint статуса
 
+Endpoint `/status` защищён `IMPORT_SECRET`:
+
 ```bash
-curl https://<worker>.workers.dev/status
+curl "https://<worker>.workers.dev/status?secret=<IMPORT_SECRET>"
 ```
 
 ### Проверка в Bitrix24
@@ -285,7 +305,7 @@ npx wrangler tail
 ## Типовые проблемы
 
 - Бот не отображается: повторите `/register`, проверьте права `imbot`.
-- `ACCESS_DENIED: Client ID not specified`: проверьте `BITRIX24_CLIENT_ID`.
+- `ACCESS_DENIED: Client ID not specified`: проверьте `CLIENT_ID` в `[vars]` в `wrangler.toml`.
 - `QUERY_LIMIT_EXCEEDED`: превышен лимит Bitrix24 API, добавьте throttling/очередь.
 - Ошибки D1: убедитесь, что миграции применялись с `--remote`.
 - Gemini не отвечает: проверьте лимиты проекта в AI Studio.
@@ -305,24 +325,28 @@ git clone https://github.com/ArtemFilin1990/bitrix24bot.git
 cd bitrix24bot
 npm install
 
-# 3) Ресурсы
-npx wrangler d1 create bitrix24bot-db
-npx wrangler kv namespace create CACHE
+# 3) Ресурсы (если создаёте с нуля — уже описаны в wrangler.toml)
+npx wrangler d1 create bearings-catalog
+npx wrangler kv namespace create CHAT_HISTORY
 
 # 4) Секреты
 npx wrangler secret put GEMINI_API_KEY
-npx wrangler secret put BITRIX24_WEBHOOK_URL
-npx wrangler secret put BITRIX24_CLIENT_ID
+npx wrangler secret put B24_PORTAL
+npx wrangler secret put B24_USER_ID
+npx wrangler secret put B24_TOKEN
+npx wrangler secret put B24_APP_TOKEN
+npx wrangler secret put IMPORT_SECRET
+npx wrangler secret put WORKER_HOST
 
 # 5) Миграции и деплой
-npx wrangler d1 execute bitrix24bot-db --remote --file=./schema.sql
+npx wrangler d1 migrations apply bearings-catalog --remote
 npx wrangler deploy
 
 # 6) Регистрация бота
-curl -X POST https://<worker>.workers.dev/register
+curl "https://<worker>.workers.dev/register?secret=<IMPORT_SECRET>"
 
 # 7) Проверка статуса
-curl https://<worker>.workers.dev/status
+curl "https://<worker>.workers.dev/status?secret=<IMPORT_SECRET>"
 ```
 
 Готово: бот работает в serverless-режиме, масштабируется автоматически и не требует отдельного сервера.
