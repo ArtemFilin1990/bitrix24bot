@@ -69,6 +69,31 @@ const SYSTEM_PROMPT = `Ты — Алексей, инженер-консульт�
 1. search_brand(название) → история, страна, специализация
 2. search_analogs для типичных артикулов этого бренда если нужно
 
+## Расшифровка обозначений — правила
+
+**ISO обозначение** (пример: 6205-2RS1/C3):
+- Тип: 6 = шариковый радиальный однорядный
+- Серия ширин: 0 (опущена) = нормальная
+- Серия диаметров: 2 = лёгкая
+- Код отверстия: 05 → d = 05×5 = 25мм (правило: для кодов 04-96 умножить на 5)
+  Исключения: 00=10мм, 01=12мм, 02=15мм, 03=17мм
+- Суффикс 2RS1: два контактных уплотнения
+- Суффикс C3: увеличенный радиальный зазор
+
+**Код типа подшипника по ISO:**
+1 = самоустанавливающийся шариковый, 2 = сферический роликовый,
+3 = конический роликовый, 4 = двухрядный радиальный шариковый,
+5 = упорный шариковый, 6 = радиальный шариковый однорядный,
+7 = радиально-упорный шариковый, N = цилиндрический роликовый (NU, NJ, NUP, N)
+
+**ГОСТ обозначение** (пример: 180205):
+- Последние 2 цифры (05): код отверстия (те же правила)
+- Предпоследние 1-2 цифры: серия диаметров
+- Цифры перед ними: конструктивная разновидность
+  1 = с уплотнениями, 6 = с канавкой под стопорное кольцо
+
+ВАЖНО: при расшифровке ВСЕГДА проверяй через search_catalog или search_analogs. Не полагайся только на вычисления — в каталоге могут быть нестандартные размеры.
+
 ## Формат ответов для Bitrix24
 
 Используй BB-коды: [B]жирный[/B], [I]курсив[/I], [U]подчёркнутый[/U]
@@ -632,9 +657,12 @@ async function executeTool(env, name, args) {
 
         // Strip trailing bearing suffixes to find base designation:
         // "6205-2RS" → "6205", "30210 M" → "30210", "6205/C3" → "6205"
-        const baseDesig = raw
-          .replace(/[-/\s]*(2RS|2RZ|2Z|ZZ|ZE|2ZE|RS|RZ|NR|NR1|N|M|MA|MB|E|P6|P5|P4|P2|C3|C4|C5|CM|TN9|TN|W|W33|W6|W3|Y)\s*$/i, "")
-          .trim();
+        // Снимаем суффиксы в цикле (до 3 итераций для цепочек типа 6205-2RS1/C3)
+        const SUFFIX_RE = /[-/\s]*(2RS[12]?|2RZ|2Z|ZZ|ZE|2ZE|RS|RZ|NR|NR1|N|M|MA|MB|E|J|K|K30|VA|VV|LLU|LLB|DDU|PP|TNH|EC|ECP|ECJ|ECM|P6|P5|P4|P2|C2|C3|C4|C5|CM|TN9|TN|W|W33|W6|W3|Y)\s*$/i;
+        let baseDesig = raw;
+        for (let s = 0; s < 3 && SUFFIX_RE.test(baseDesig); s++) {
+          baseDesig = baseDesig.replace(SUFFIX_RE, "").trim();
+        }
         const searchBase = baseDesig.length >= 3 && baseDesig !== raw;
 
         // Попытка распарсить запрос по размерам: "25 52 15" или "25x52x15" или "25×52×15"
@@ -701,8 +729,11 @@ async function executeTool(env, name, args) {
         }
 
         if (catRows.length) {
-          return JSON.stringify(
-            catRows.map((r) => ({
+          return JSON.stringify({
+            found: catRows.length,
+            source: "Каталог Эверест",
+            note: "Показаны ВСЕ найденные позиции. Если нужного варианта нет в списке — его нет в каталоге.",
+            results: catRows.map((r) => ({
               производитель: r.manufacturer || r.brand_display,
               обозначение: r.designation,
               наименование: r.name_ru || r.category_ru,
@@ -718,7 +749,7 @@ async function executeTool(env, name, args) {
               iso: r.iso_ref,
               суффикс: r.suffix_desc,
             })),
-          );
+          });
         }
 
         // Запасной вариант — таблица bearings (из CRM Bitrix24)
@@ -733,24 +764,30 @@ async function executeTool(env, name, args) {
         if (!results.length)
           return JSON.stringify({
             found: 0,
-            message: "Подшипник не найден в каталоге",
+            message: "Подшипник не найден в каталоге Эверест",
+            STRICT_RULE: "НЕ ВЫДУМЫВАЙ цену, наличие, количество или размеры. Скажи пользователю: в каталоге Эверест не найдено, рекомендую уточнить у менеджера или в каталоге производителя.",
           });
-        return JSON.stringify(
-          results.map((r) => ({
+        return JSON.stringify({
+          found: results.length,
+          source: "Каталог Эверест",
+          note: "Показаны ВСЕ найденные позиции. Если нужного варианта нет в списке — его нет в каталоге.",
+          results: results.map((r) => ({
             наименование: r.name,
             артикул: r.article,
             завод: r.brand,
             вес_кг: r.weight,
           })),
-        );
+        });
       }
       case "search_knowledge": {
         // Sanitize for FTS5: remove special chars that cause parse errors
-        // Keeps alphanumeric, Cyrillic, spaces, hyphens
-        const ftsQuery = args.query.trim()
-          .replace(/['"*^():]/g, " ")
+        // Keeps alphanumeric, Cyrillic, spaces; заменяем дефисы на пробелы (- = NOT в FTS5)
+        const ftsClean = args.query.trim()
+          .replace(/['"*^():\-\/]/g, " ")
           .replace(/\s+/g, " ")
           .trim();
+        // Phrase match (в кавычках) для точного поиска обозначений
+        const ftsQuery = ftsClean ? `"${ftsClean}"` : "";
         let results = [];
         if (ftsQuery) {
           try {
@@ -773,7 +810,32 @@ async function executeTool(env, name, args) {
               .all();
             results = fts.results || [];
           } catch (e) {
-            console.error("FTS search_knowledge error:", e);
+            console.error("FTS search_knowledge phrase error:", e);
+          }
+          // Fallback: FTS без кавычек (OR/AND по словам) если phrase match пуст
+          if (!results.length && ftsClean.includes(" ")) {
+            try {
+              const fts2 = await env.CATALOG.prepare(
+                `SELECT d.title, d.source_path, c.heading_path,
+                        snippet(kb_chunks_fts, 2, '[B]', '[/B]', ' … ', 18) AS snippet,
+                        COALESCE(group_concat(DISTINCT t.name), '') AS tags,
+                        bm25(kb_chunks_fts) AS score
+                 FROM kb_chunks_fts
+                 JOIN kb_chunks c ON c.id = kb_chunks_fts.rowid
+                 JOIN kb_documents d ON d.id = c.document_id
+                 LEFT JOIN kb_document_tags dt ON dt.document_id = d.id
+                 LEFT JOIN kb_tags t ON t.id = dt.tag_id
+                 WHERE kb_chunks_fts MATCH ?
+                 GROUP BY c.id
+                 ORDER BY score
+                 LIMIT 5`,
+              )
+                .bind(ftsClean)
+                .all();
+              results = fts2.results || [];
+            } catch (e) {
+              console.error("FTS search_knowledge words error:", e);
+            }
           }
         }
         if (!results.length) {
@@ -809,6 +871,7 @@ async function executeTool(env, name, args) {
           return JSON.stringify({
             found: 0,
             message: "Информация не найдена в базе знаний",
+            STRICT_RULE: "НЕ ВЫДУМЫВАЙ содержание статей или стандартов. Скажи: в базе знаний Эверест информация не найдена. Ответь на основе своих общих знаний, но укажи что это НЕ из базы Эверест.",
           });
         return JSON.stringify(
           results.map((r) => ({
@@ -833,7 +896,8 @@ async function executeTool(env, name, args) {
         if (!results.length)
           return JSON.stringify({
             found: 0,
-            message: "Производитель не найден",
+            message: "Производитель не найден в базе Эверест",
+            STRICT_RULE: "НЕ ВЫДУМЫВАЙ данные о производителе. Скажи: в справочнике Эверест информация не найдена.",
           });
         return JSON.stringify(
           results.map((r) => ({ бренд: r.name, описание: r.description })),
@@ -874,15 +938,29 @@ async function executeTool(env, name, args) {
         if (!results.length)
           return JSON.stringify({
             found: 0,
-            message: "Аналоги не найдены в базе",
+            message: "Аналоги не найдены в базе Эверест",
+            STRICT_RULE: "НЕ ВЫДУМЫВАЙ аналоги из своих знаний. Скажи: в базе аналогов Эверест совпадений нет. Рекомендую проверить по каталогу производителя или уточнить у инженера.",
           });
 
+        // Дедупликация двунаправленных пар
+        const seen = new Set();
+        const deduped = results.filter((r) => {
+          const pair = [r.designation, r.analog_designation].sort().join("|");
+          if (seen.has(pair)) return false;
+          seen.add(pair);
+          return true;
+        });
+
         return JSON.stringify({
+          found: deduped.length,
           match_type: matchType,
           note: matchType === "partial"
-            ? "ЧАСТИЧНОЕ СОВПАДЕНИЕ — требует технической проверки (d, D, B, тип нагрузки) перед заменой"
-            : "ТОЧНОЕ СОВПАДЕНИЕ по обозначению в базе аналогов",
-          results: results.map((r) => ({
+            ? "ЧАСТИЧНОЕ СОВПАДЕНИЕ — НЕ является подтверждённым аналогом. Обязательна проверка: d, D, B, тип нагрузки, грузоподъёмность (Cr, C0r)."
+            : "ТОЧНОЕ СОВПАДЕНИЕ по обозначению в базе аналогов. Другие аналоги вне этого списка НЕ ПОДТВЕРЖДЕНЫ базой.",
+          substitution_warning: matchType === "exact"
+            ? "Перед заменой проверьте: класс точности, радиальный зазор (C2/CN/C3/C4), тип смазки, материал сепаратора, допустимую температуру."
+            : "ЧАСТИЧНОЕ СОВПАДЕНИЕ. Перед заменой ОБЯЗАТЕЛЬНО сверьте габариты (d, D, B) и тип подшипника.",
+          results: deduped.map((r) => ({
             бренд: r.brand,
             обозначение: r.designation,
             аналог: r.analog_designation,
@@ -919,18 +997,30 @@ async function askGemini(env, history, userText) {
 
   const contents = [...history, { role: "user", parts: [{ text: userText }] }];
 
-  for (let i = 0; i < 5; i++) {
-    console.log(`🔄 Gemini iteration ${i + 1}/5`);
-    const r = await fetchWithTimeout(URL, {
+  for (let i = 0; i < 8; i++) {
+    console.log(`🔄 Gemini iteration ${i + 1}/8`);
+    const geminiBody = JSON.stringify({
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      tools: GEMINI_TOOLS,
+      generationConfig: { maxOutputTokens: 4096, temperature: 0.1 },
+    });
+    let r = await fetchWithTimeout(URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents,
-        tools: GEMINI_TOOLS,
-        generationConfig: { maxOutputTokens: 1024, temperature: 0.3 },
-      }),
-    });
+      body: geminiBody,
+    }, 30000);
+
+    // Retry один раз при транзиентных ошибках (429/503)
+    if (r.status === 429 || r.status === 503) {
+      console.warn(`⚠️ Gemini: retrying after HTTP ${r.status}`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      r = await fetchWithTimeout(URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: geminiBody,
+      }, 30000);
+    }
 
     if (!r.ok) {
       const text = await r.text().catch(() => "");
@@ -962,14 +1052,44 @@ async function askGemini(env, history, userText) {
 
     const fnCalls = parts.filter((p) => p.functionCall);
     if (!fnCalls.length) {
-      const responseText = parts
+      let responseText = parts
         .filter((p) => p.text)
         .map((p) => p.text)
         .join("") || "—";
-      console.log(`✅ Gemini: final response (${responseText.length} chars)`);
+      // Проверка причины завершения
+      const finishReason = candidate.finishReason;
+      if (finishReason === "MAX_TOKENS") {
+        console.warn("⚠️ Gemini: response truncated (MAX_TOKENS)");
+        responseText += "\n\n[I]...ответ сокращён. Задайте уточняющий вопрос для продолжения.[/I]";
+      }
+      // Пост-обработка: детект потенциальных галлюцинаций
+      // Ищем в истории текущего разговора результаты инструментов с found:0
+      const toolResults = contents
+        .filter((c) => c.role === "function")
+        .flatMap((c) => c.parts || []);
+      for (const tr of toolResults) {
+        try {
+          const res = tr.functionResponse;
+          if (!res) continue;
+          const parsed = typeof res.response?.result === "string"
+            ? JSON.parse(res.response.result) : null;
+          if (!parsed || parsed.found !== 0) continue;
+
+          if (res.name === "search_catalog" && /\d+\s*(руб|₽|шт)/i.test(responseText)) {
+            responseText += "\n\n[I]⚠️ Внимание: данные о цене/наличии не подтверждены каталогом Эверест. Уточните у менеджера.[/I]";
+            break;
+          }
+          if (res.name === "search_analogs" && /аналог/i.test(responseText) && /\d{3,}/i.test(responseText)) {
+            responseText += "\n\n[I]⚠️ Указанные аналоги не подтверждены базой Эверест. Требуется проверка по габаритам (d, D, B).[/I]";
+            break;
+          }
+        } catch { /* skip parse errors */ }
+      }
+
+      console.log(`✅ Gemini: final response (${responseText.length} chars, finishReason=${finishReason})`);
       return {
         text: responseText,
-        history: contents.slice(-20), // хранить последние 20 turns
+        history: contents.slice(-20),
       };
     }
 
@@ -2038,7 +2158,7 @@ export default {
       }
 
       // Обработать только входящие сообщения боту
-      if (event !== "ONIMBOTMESSAGEADD" || !message || !userId || !chatId) {
+      if (event !== "ONIMBOTMESSAGEADD" || !message || message === "undefined" || message === "null" || !userId || !chatId) {
         console.log("⏭️ Webhook skipped:", { event, hasMessage: !!message, userId, chatId });
         return json({ ok: true });
       }
@@ -2132,11 +2252,18 @@ export default {
         return json({ ok: true });
       }
 
-      console.log("🤖 Starting AI processing...", { chatId, userId, messageLength: message.length });
+      // Защита от слишком длинных сообщений
+      const MAX_MSG_LENGTH = 4000;
+      const processMessage = message.length > MAX_MSG_LENGTH
+        ? message.slice(0, MAX_MSG_LENGTH) + `\n\n[сообщение сокращено, было ${message.length} символов]`
+        : message;
+
+      console.log("🤖 Starting AI processing...", { chatId, userId, messageLength: processMessage.length });
 
       // Тяжёлая AI-логика выполняется в фоне — воркер сразу возвращает 200 OK Bitrix24,
       // исключая таймаут вебхука (ошибка 1102 Cloudflare)
       ctx.waitUntil(
+        Promise.race([
         (async () => {
           let responseAttempted = false;
           try {
@@ -2155,8 +2282,8 @@ export default {
             // Добавить контекст в первый запрос сессии
             const contextMsg =
               history.length === 0
-                ? `[Контекст: пользователь B24 ID=${userId}, диалог=${chatId}${isGroupChat ? ", групповой чат" : ""}]\n\n${message}`
-                : message;
+                ? `[Контекст: пользователь B24 ID=${userId}, диалог=${chatId}${isGroupChat ? ", групповой чат" : ""}]\n\n${processMessage}`
+                : processMessage;
 
             console.log("🧠 Calling Gemini...", { historyLength: history.length, contextLength: contextMsg.length });
             const { text, history: newHistory } = await askGemini(
@@ -2219,6 +2346,13 @@ export default {
             }
           }
         })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("TOTAL_TIMEOUT")), 55000)),
+        ]).catch(async (e) => {
+          if (e.message === "TOTAL_TIMEOUT") {
+            console.error("⏱️ Total processing timeout exceeded (55s)", { chatId, userId });
+            await botReply(env, chatId, "⚠️ Обработка заняла слишком много времени. Попробуйте упростить вопрос.", webhookBotId).catch(() => {});
+          }
+        }),
       );
 
       return json({ ok: true });
