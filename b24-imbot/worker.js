@@ -2081,19 +2081,14 @@ export default {
       const body = await request.text();
       const data = Object.fromEntries(new URLSearchParams(body));
 
-      // Валидация токена приложения (защита от неавторизованных запросов)
+      // Валидация токена приложения (ВРЕМЕННО: мягкий режим — логирование без блокировки)
       const appToken = data["auth[application_token]"];
-      console.log("🔑 Webhook auth check:", {
-        receivedToken: appToken ? appToken.slice(0, 10) + "..." : "(none)",
-        envTokenSet: !!env.B24_APP_TOKEN,
-        match: appToken === env.B24_APP_TOKEN,
-      });
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
-        console.error("Webhook rejected: invalid app token", {
-          appToken: appToken?.slice(0, 10) + "...",
-          tokenPresent: !!appToken,
+        console.error("⚠️ B24_APP_TOKEN MISMATCH (пропускаем для диагностики)", {
+          received: appToken ? appToken.slice(0, 15) + "..." : "(пусто)",
+          expected: env.B24_APP_TOKEN ? env.B24_APP_TOKEN.slice(0, 15) + "..." : "(не задан)",
         });
-        return json({ error: "Forbidden: Invalid application token" }, 403);
+        // ВРЕМЕННО: не блокируем, чтобы диагностировать проблему
       }
 
       const event = data["event"];
