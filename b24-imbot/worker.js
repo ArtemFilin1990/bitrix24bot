@@ -348,14 +348,28 @@ async function botReply(env, chatId, text, botId = null) {
     console.log(`✅ botReply success:`, { chatId, messageId: result?.message_id || 'unknown', effectiveBotId });
     return result;
   } catch (error) {
-    console.error(`❌ botReply FAILED:`, {
+    console.warn(`⚠️ imbot.message.add failed, trying im.message.add fallback:`, {
       chatId,
       error: error.message,
-      stack: error.stack,
       effectiveBotId,
-      CLIENT_ID: env.CLIENT_ID?.slice(0, 10) + '...'
     });
-    throw error; // Re-throw so caller can handle
+    // Fallback: im.message.add works when webhook owns the REST token
+    try {
+      const fbResult = await b24(env, "im.message.add", {
+        DIALOG_ID: chatId,
+        MESSAGE: text,
+        SYSTEM: "N",
+      });
+      console.log(`✅ botReply fallback success (im.message.add):`, { chatId, result: fbResult });
+      return fbResult;
+    } catch (fbErr) {
+      console.error(`❌ botReply BOTH methods failed:`, {
+        chatId,
+        imbotError: error.message,
+        imError: fbErr.message,
+      });
+      throw fbErr;
+    }
   }
 }
 
