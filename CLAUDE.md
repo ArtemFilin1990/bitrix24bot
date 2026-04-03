@@ -127,7 +127,7 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 | `executeTool(toolName, args, env)` | Dispatch tool calls to D1 queries or Bitrix24 API |
 | `getHistory / saveHistory` | KV conversation history (last 20 turns, 24-hour TTL) |
 | `registerBot(env)` | Register bot with Bitrix24 via imbot.v2.Bot.register |
-| `registerBotCommands(env, botId)` | Register slash commands (/помощь, /сброс, /статус) with Bitrix24 |
+| `registerBotCommands(env, botId)` | Register slash commands (/подшипник, /аналог, /статус) with Bitrix24 |
 | `isPrivateIpAddress / validateImportUrl` | Security helpers for SSRF protection on import endpoints |
 | `fetchWithTimeout(url, options, timeoutMs)` | HTTP request wrapper with 15-second timeout |
 | `sanitizeId(id)` | Input validation for numeric IDs |
@@ -136,7 +136,7 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 
 **Group chat filtering**: Bot only responds in group chats if message contains one of the KEYWORDS (подшипник, артикул, сделка, клиент, цена, стоимость, скидка, кп, коммерческ, заказ, поставка, наличие, срок, каталог, аналог, etc.) or the bot is @-mentioned. Private chats always get a response.
 
-**Bot slash commands**: `/помощь` (help), `/сброс` (reset history), `/статус` (status) — registered via `registerBotCommands()` during `/register`.
+**Bot slash commands**: `/подшипник` (search), `/аналог` (analogs), `/статус` (status) — registered via `registerBotCommands()` during `/register`. Additional commands `/помощь` (help) and `/сброс` (reset history) are handled as message listeners in the webhook handler.
 
 **Typing indicator**: The bot sends `imbot.sendtyping` before AI processing to show a typing animation in Bitrix24.
 
@@ -344,7 +344,7 @@ The easiest way to add data is the inbox/ git workflow:
 GET <worker-url>/register?secret=<IMPORT_SECRET>
 ```
 
-Must be done once after initial deployment. Registration uses the imbot.v2 API (`imbot.v2.Bot.register`) and requires `B24_APP_TOKEN` to be set. It also auto-registers slash commands (`/помощь`, `/сброс`, `/статус`) via `registerBotCommands()`.
+Must be done once after initial deployment. Registration uses the imbot.v2 API (`imbot.v2.Bot.register`) and requires `B24_APP_TOKEN` to be set. It also auto-registers slash commands (`/подшипник`, `/аналог`, `/статус`) via `registerBotCommands()`.
 
 ### Remote Control (Sending Messages)
 
