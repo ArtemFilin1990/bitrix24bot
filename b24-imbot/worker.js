@@ -996,6 +996,7 @@ async function askGemini(env, history, userText) {
   console.log(`🤖 askGemini: model=${MODEL}, historyLength=${history.length}`);
 
   const contents = [...history, { role: "user", parts: [{ text: userText }] }];
+  const currentTurnStart = contents.length; // индекс начала записей текущего хода
 
   for (let i = 0; i < 8; i++) {
     console.log(`🔄 Gemini iteration ${i + 1}/8`);
@@ -1063,8 +1064,9 @@ async function askGemini(env, history, userText) {
         responseText += "\n\n[I]...ответ сокращён. Задайте уточняющий вопрос для продолжения.[/I]";
       }
       // Пост-обработка: детект потенциальных галлюцинаций
-      // Ищем в истории текущего разговора результаты инструментов с found:0
+      // Ищем ТОЛЬКО в текущем ходе (не в истории) результаты инструментов с found:0
       const toolResults = contents
+        .slice(currentTurnStart)
         .filter((c) => c.role === "function")
         .flatMap((c) => c.parts || []);
       for (const tr of toolResults) {
@@ -2262,6 +2264,7 @@ export default {
 
       // Тяжёлая AI-логика выполняется в фоне — воркер сразу возвращает 200 OK Bitrix24,
       // исключая таймаут вебхука (ошибка 1102 Cloudflare)
+      let timedOut = false;
       ctx.waitUntil(
         Promise.race([
         (async () => {
@@ -2296,6 +2299,12 @@ export default {
               chatId,
               hasContent: text && text.trim().length > 0
             });
+
+            // Если таймаут уже сработал — не отправлять дубль
+            if (timedOut) {
+              console.warn("⏱️ Skipping reply — timeout already fired", { chatId });
+              return;
+            }
 
             // Проверка что Gemini вернул осмысленный ответ
             if (!text || text.trim().length === 0) {
@@ -2332,9 +2341,13 @@ export default {
                 : "⚠️ Произошла ошибка при обработке запроса. Обратитесь к администратору.";
 
             try {
+              if (timedOut) {
+                console.warn("⏱️ Skipping error reply — timeout already fired", { chatId });
+              } else {
               console.log("📤 Attempting to send error message to user...", { chatId });
               await botReply(env, chatId, safeMessage, webhookBotId);
               console.log("✅ Error message sent to user", { chatId });
+              }
             } catch (replyErr) {
               console.error("❌ CRITICAL: Failed to send error reply:", {
                 chatId,
@@ -2349,6 +2362,7 @@ export default {
         new Promise((_, reject) => setTimeout(() => reject(new Error("TOTAL_TIMEOUT")), 55000)),
         ]).catch(async (e) => {
           if (e.message === "TOTAL_TIMEOUT") {
+            timedOut = true;
             console.error("⏱️ Total processing timeout exceeded (55s)", { chatId, userId });
             await botReply(env, chatId, "⚠️ Обработка заняла слишком много времени. Попробуйте упростить вопрос.", webhookBotId).catch(() => {});
           }
