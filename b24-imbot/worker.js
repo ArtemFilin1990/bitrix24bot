@@ -2145,7 +2145,7 @@ export default {
         const workerUrl = `https://${env.WORKER_HOST}`;
         const result = await b24(env, "imbot.v2.Bot.register", {
           fields: {
-            code: "everest_expert_v3",
+            code: "everest_v4",
             botToken: env.B24_APP_TOKEN,
             properties: {
               name: "ИИ-эксперт Эверест",
