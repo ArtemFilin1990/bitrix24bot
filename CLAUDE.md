@@ -146,7 +146,7 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 
 | Route | Method | Auth | Description |
 |---|---|---|---|
-| `/imbot` | POST | B24_APP_TOKEN | Main webhook for incoming Bitrix24 messages |
+| `/imbot` | POST | B24_APP_TOKEN (optional) | Main webhook for incoming Bitrix24 messages; token validated only when set |
 | `/register` | GET | IMPORT_SECRET | Register bot with Bitrix24 + register slash commands |
 | `/send` | POST | IMPORT_SECRET | Remote control: send message to any Bitrix24 chat |
 | `/reset` | POST | None | Clear conversation history in KV; requires JSON body with `user_id` and `dialog_id` |
