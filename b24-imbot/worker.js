@@ -2096,6 +2096,16 @@ export default {
       const chatId =
         data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
       const message = data["data[PARAMS][MESSAGE]"]?.trim();
+
+      // ДИАГНОСТИКА: простой пинг-понг чтобы проверить доходят ли вебхуки
+      if (event === "ONIMBOTMESSAGEADD" && chatId && message === "ping") {
+        const diagBotId = data["data[BOT_ID]"] || env.BOT_ID;
+        ctx.waitUntil(
+          botReply(env, chatId, `pong! event=${event} user=${userId} chat=${chatId} bot=${diagBotId}`, diagBotId)
+            .catch((e) => console.error("DIAG pong error:", e))
+        );
+        return json({ ok: true });
+      }
       // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
       // которому адресовано сообщение (ID в чате может отличаться от env.BOT_ID)
       const webhookBotId = data["data[BOT_ID]"] || env.BOT_ID;
