@@ -14,8 +14,6 @@ on:
 jobs:
   process-inbox:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       contents: write
 
@@ -41,6 +39,11 @@ jobs:
         run: |
           python scripts/process_inbox.py --inbox inbox --output /tmp/inbox.sql
           echo "SQL lines: $(wc -l < /tmp/inbox.sql)"
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.count != '0'
+        with:
+          node-version: '24'
 
       - name: Install Wrangler
         if: steps.check.outputs.count != '0'

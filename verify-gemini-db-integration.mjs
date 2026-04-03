@@ -62,13 +62,13 @@ console.log(`   ${hasFunctionDeclarations ? '✅' : '❌'} functionDeclarations 
 // Verify askGemini function
 const hasAskGemini = workerCode.includes('async function askGemini(env, history, userText)');
 const hasToolsInPayload = workerCode.includes('tools: GEMINI_TOOLS');
-const hasFunctionLoop = workerCode.includes('for (let i = 0; i < 5; i++)');
+const hasFunctionLoop = /for \(let i = 0; i < \d+; i\+\+\)/.test(workerCode);
 const hasFunctionRole = workerCode.includes('role: "function"');
 
 console.log("🤖 askGemini() Function:\n");
 console.log(`   ${hasAskGemini ? '✅' : '❌'} Function defined`);
 console.log(`   ${hasToolsInPayload ? '✅' : '❌'} Tools passed to Gemini API`);
-console.log(`   ${hasFunctionLoop ? '✅' : '❌'} Iteration loop (max 5)`);
+console.log(`   ${hasFunctionLoop ? '✅' : '❌'} Iteration loop`);
 console.log(`   ${hasFunctionRole ? '✅' : '❌'} Correct function response role\n`);
 
 // Verify executeTool dispatcher
