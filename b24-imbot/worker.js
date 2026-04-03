@@ -2077,30 +2077,37 @@ export default {
       });
     }
 
-    // ВРЕМЕННО: перерегистрация бота
+    // ВРЕМЕННО: перерегистрация бота с новым кодом
     if (url.pathname === "/fix-bot" && request.method === "GET") {
       if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
         return json({ error: "Forbidden" }, 403);
       }
-      const steps = [];
-      // 1. Удалить старого бота (v1 и v2)
-      for (const botId of [1267, 1275, 1265]) {
-        try {
-          await b24(env, "imbot.unregister", { BOT_ID: botId, CLIENT_ID: env.CLIENT_ID });
-          steps.push({ step: `unregister bot ${botId}`, ok: true });
-        } catch (e) {
-          steps.push({ step: `unregister bot ${botId}`, error: e.message });
-        }
-      }
-      // 2. Зарегистрировать нового бота
       try {
-        const result = await registerBot(env);
-        const commands = await registerBotCommands(env, result);
-        steps.push({ step: "register new bot", ok: true, bot_id: result, commands });
-        return json({ ok: true, steps, new_bot_id: result, action: "ОБНОВИТЕ BOT_ID в wrangler.toml на это значение" });
+        const workerUrl = `https://${env.WORKER_HOST}`;
+        const result = await b24(env, "imbot.v2.Bot.register", {
+          code: "everest_expert_v3",
+          botToken: env.B24_APP_TOKEN,
+          properties: {
+            name: "ИИ-эксперт Эверест",
+            lastName: "",
+            color: "GREEN",
+            type: "B",
+            openLine: "N",
+          },
+          eventHandlerUrl: `${workerUrl}/imbot`,
+        });
+        const newBotId = result;
+        let commands = [];
+        try { commands = await registerBotCommands(env, newBotId); } catch (e) { commands = [{ error: e.message }]; }
+        return json({
+          ok: true,
+          new_bot_id: newBotId,
+          handler_url: `${workerUrl}/imbot`,
+          commands,
+          action: `Обновите BOT_ID на ${newBotId}`,
+        });
       } catch (e) {
-        steps.push({ step: "register", error: e.message });
-        return json({ ok: false, steps }, 500);
+        return json({ ok: false, error: e.message }, 500);
       }
     }
 
