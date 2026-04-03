@@ -88,7 +88,11 @@ const SYSTEM_PROMPT = `Ты — Алексей, инженер-консульт�
 - Суммы всегда в рублях, массы в кг или г, размеры в мм.
 - Если в базе нет данных — скажи честно и предложи как найти (у менеджера, в каталоге производителя).
 - Для Bitrix24 CRM используй инструменты get_deal, search_deals, get_company, get_deal_products, get_my_deals.
-- Никогда не выдумывай артикулы, цены или наличие — только то что нашёл в базе.`;
+- Никогда не выдумывай артикулы, цены или наличие — только то что нашёл в базе.
+- При вопросе об артикуле с суффиксом (6205-2RS, 6205/C3, 30210 M) — ищи и с суффиксом, и без суффикса. Суффикс описывает исполнение, базовый номер (6205, 30210) — тип подшипника.
+- search_analogs возвращает поле match_type: "exact" (точное совпадение обозначения) или "partial" (частичное LIKE-совпадение). PARTIAL — не является подтверждённым аналогом: сообщай пользователю что совпадение требует технической проверки (d, D, B, тип нагрузки должны совпадать).
+- Если база вернула found:0 — не выдумывай данные. Говори прямо: "в каталоге Эверест не найдено, рекомендую уточнить у менеджера или в каталоге производителя".
+- Аналог подтверждён только при точном совпадении всех габаритных размеров (d, D, B) и типа подшипника. Совпадение только номера без габаритов — указывай как ПРЕДПОЛАГАЕМЫЙ аналог.`;
 
 // ── Tools ─────────────────────────────────────────────────
 const TOOLS = [
@@ -287,8 +291,9 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
 }
 
 // Отправить сообщение от бота в чат
-async function botReply(env, chatId, text) {
-  console.log(`💬 botReply to ${chatId}:`, { textLength: text.length, textPreview: text.slice(0, 100) });
+async function botReply(env, chatId, text, botId = null) {
+  const effectiveBotId = botId || env.BOT_ID;
+  console.log(`💬 botReply to ${chatId}:`, { textLength: text.length, textPreview: text.slice(0, 100), effectiveBotId });
 
   // Валидация параметров
   if (!chatId) {
@@ -299,7 +304,7 @@ async function botReply(env, chatId, text) {
     console.error("❌ botReply: invalid text", { text: typeof text });
     throw new Error("botReply: text must be a non-empty string");
   }
-  if (!env.BOT_ID) {
+  if (!effectiveBotId) {
     console.error("❌ botReply: missing BOT_ID in environment");
     throw new Error("botReply: BOT_ID not configured");
   }
@@ -310,19 +315,19 @@ async function botReply(env, chatId, text) {
 
   try {
     const result = await b24(env, "imbot.message.add", {
-      BOT_ID: env.BOT_ID,
+      BOT_ID: effectiveBotId,
       CLIENT_ID: env.CLIENT_ID,
       DIALOG_ID: chatId,
       MESSAGE: text,
     });
-    console.log(`✅ botReply success:`, { chatId, messageId: result?.message_id || 'unknown' });
+    console.log(`✅ botReply success:`, { chatId, messageId: result?.message_id || 'unknown', effectiveBotId });
     return result;
   } catch (error) {
     console.error(`❌ botReply FAILED:`, {
       chatId,
       error: error.message,
       stack: error.stack,
-      BOT_ID: env.BOT_ID,
+      effectiveBotId,
       CLIENT_ID: env.CLIENT_ID?.slice(0, 10) + '...'
     });
     throw error; // Re-throw so caller can handle
@@ -625,6 +630,13 @@ async function executeTool(env, name, args) {
         const raw = args.query.trim();
         const q = `%${raw}%`;
 
+        // Strip trailing bearing suffixes to find base designation:
+        // "6205-2RS" → "6205", "30210 M" → "30210", "6205/C3" → "6205"
+        const baseDesig = raw
+          .replace(/[-/\s]*(2RS|2RZ|2Z|ZZ|ZE|2ZE|RS|RZ|NR|NR1|N|M|MA|MB|E|P6|P5|P4|P2|C3|C4|C5|CM|TN9|TN|W|W33|W6|W3|Y)\s*$/i, "")
+          .trim();
+        const searchBase = baseDesig.length >= 3 && baseDesig !== raw;
+
         // Попытка распарсить запрос по размерам: "25 52 15" или "25x52x15" или "25×52×15"
         const dimMatch = raw
           .replace(/[×xXхХ]/g, " ")
@@ -660,12 +672,32 @@ async function executeTool(env, name, args) {
                     gost_ref, iso_ref, brand_display, suffix_desc
              FROM catalog
              WHERE item_id = ? OR designation LIKE ? OR name_ru LIKE ? OR gost_ref LIKE ? OR iso_ref LIKE ?
-             ORDER BY stock_flag DESC, qty DESC
+             ORDER BY
+               CASE WHEN item_id = ? THEN 0 WHEN designation = ? THEN 1 ELSE 2 END,
+               stock_flag DESC, qty DESC
              LIMIT 10`,
           )
-            .bind(raw, q, q, q, q)
+            .bind(raw, q, q, q, q, raw, raw)
             .all();
           catRows = res.results || [];
+        }
+
+        // Fallback: search by base designation (without suffix) if stripping changed the query
+        if (!catRows.length && searchBase) {
+          const qBase = `%${baseDesig}%`;
+          const res2 = await env.CATALOG.prepare(
+            `SELECT manufacturer, designation, name_ru, category_ru, subcategory_ru,
+                    d_mm, big_d_mm, b_mm, mass_kg, price_rub, qty, stock_flag,
+                    gost_ref, iso_ref, brand_display, suffix_desc
+             FROM catalog
+             WHERE designation LIKE ? OR name_ru LIKE ? OR gost_ref LIKE ? OR iso_ref LIKE ?
+             ORDER BY CASE WHEN designation = ? THEN 0 ELSE 1 END,
+               stock_flag DESC, qty DESC
+             LIMIT 10`,
+          )
+            .bind(qBase, qBase, qBase, qBase, baseDesig)
+            .all();
+          catRows = res2.results || [];
         }
 
         if (catRows.length) {
@@ -713,7 +745,12 @@ async function executeTool(env, name, args) {
         );
       }
       case "search_knowledge": {
-        const ftsQuery = args.query.trim().replace(/['"*]/g, " ").trim();
+        // Sanitize for FTS5: remove special chars that cause parse errors
+        // Keeps alphanumeric, Cyrillic, spaces, hyphens
+        const ftsQuery = args.query.trim()
+          .replace(/['"*^():]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
         let results = [];
         if (ftsQuery) {
           try {
@@ -803,29 +840,56 @@ async function executeTool(env, name, args) {
         );
       }
       case "search_analogs": {
-        const q = `%${args.query}%`;
-        const { results } = await env.CATALOG.prepare(
+        const rawQuery = args.query.trim();
+
+        // Step 1: exact match by designation (highest confidence)
+        const exactRes = await env.CATALOG.prepare(
           `SELECT brand, designation, analog_designation, analog_brand, factory
            FROM analogs
-           WHERE designation LIKE ? OR analog_designation LIKE ?
-           LIMIT 20`,
+           WHERE designation = ? OR analog_designation = ?
+           LIMIT 30`,
         )
-          .bind(q, q)
+          .bind(rawQuery, rawQuery)
           .all();
+        const exactResults = exactRes.results || [];
+
+        // Step 2: partial LIKE match only if no exact results found
+        let likeResults = [];
+        if (!exactResults.length) {
+          const q = `%${rawQuery}%`;
+          const likeRes = await env.CATALOG.prepare(
+            `SELECT brand, designation, analog_designation, analog_brand, factory
+             FROM analogs
+             WHERE designation LIKE ? OR analog_designation LIKE ?
+             LIMIT 20`,
+          )
+            .bind(q, q)
+            .all();
+          likeResults = likeRes.results || [];
+        }
+
+        const results = exactResults.length ? exactResults : likeResults;
+        const matchType = exactResults.length ? "exact" : "partial";
+
         if (!results.length)
           return JSON.stringify({
             found: 0,
             message: "Аналоги не найдены в базе",
           });
-        return JSON.stringify(
-          results.map((r) => ({
+
+        return JSON.stringify({
+          match_type: matchType,
+          note: matchType === "partial"
+            ? "ЧАСТИЧНОЕ СОВПАДЕНИЕ — требует технической проверки (d, D, B, тип нагрузки) перед заменой"
+            : "ТОЧНОЕ СОВПАДЕНИЕ по обозначению в базе аналогов",
+          results: results.map((r) => ({
             бренд: r.brand,
             обозначение: r.designation,
             аналог: r.analog_designation,
             бренд_аналога: r.analog_brand,
             завод: r.factory,
           })),
-        );
+        });
       }
       default:
         return JSON.stringify({ error: "Unknown tool: " + name });
@@ -1002,6 +1066,9 @@ async function saveHistory(env, userId, dialogId, history) {
 // ── Регистрация бота ─────────────────────────────────────
 // Вызвать один раз: GET /register
 async function registerBot(env) {
+  if (!env.B24_APP_TOKEN) {
+    throw new Error("B24_APP_TOKEN is required for imbot.v2.Bot.register. Set it via Cloudflare Dashboard Secrets.");
+  }
   const workerUrl = `https://${env.WORKER_HOST}`;
   // Используем imbot.v2.Bot.register (актуальный API)
   const result = await b24(env, "imbot.v2.Bot.register", {
@@ -1522,6 +1589,10 @@ export default {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
           });
+          if (!resp.ok) {
+            const errText = await resp.text().catch(() => "");
+            throw new Error(`${endpoint}: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+          }
           const data = await resp.json();
           if (data.error)
             throw new Error(
@@ -1888,12 +1959,17 @@ export default {
       const chatId =
         data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
       const message = data["data[PARAMS][MESSAGE]"]?.trim();
+      // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
+      // которому адресовано сообщение (ID в чате может отличаться от env.BOT_ID)
+      const webhookBotId = data["data[BOT_ID]"] || env.BOT_ID;
 
       // Логирование входящего вебхука
       console.log("📨 Webhook received:", {
         event,
         userId,
         chatId,
+        webhookBotId,
+        envBotId: env.BOT_ID,
         messageLength: message?.length || 0,
         messagePreview: message?.slice(0, 50)
       });
@@ -1924,7 +2000,7 @@ export default {
           ctx.waitUntil((async () => {
             try {
               await b24(env, "imbot.sendtyping", {
-                BOT_ID: env.BOT_ID,
+                BOT_ID: webhookBotId,
                 CLIENT_ID: env.CLIENT_ID,
                 DIALOG_ID: cmdChatId,
               }).catch((e) => console.error("imbot.sendtyping error:", e));
@@ -1951,10 +2027,10 @@ export default {
               const history = await getHistory(env, cmdUserId, cmdChatId);
               const { text, history: newHistory } = await askGemini(env, history, prompt);
               await saveHistory(env, cmdUserId, cmdChatId, newHistory);
-              await botReply(env, cmdChatId, text);
+              await botReply(env, cmdChatId, text, webhookBotId);
             } catch (e) {
               console.error("❌ Error in slash command handler:", { error: e.message, commandName, cmdChatId });
-              await botReply(env, cmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.").catch(() => {});
+              await botReply(env, cmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
             }
           })());
         }
@@ -2041,8 +2117,7 @@ export default {
             (isGroupChat
               ? `[I]В групповом чате реагирую на слова: подшипник, сделка, КП, цена, скидка, заказ, поставка, наличие, артикул...[/I]\n\n`
               : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`) +
-            `/сброс — очистить историю диалога\n` +
-            `/статус — состояние бота и конфигурации`,
+
         );
         return json({ ok: true });
       }
@@ -2054,7 +2129,7 @@ export default {
         if (safeUser && safeDialog) {
           await env.CHAT_HISTORY.delete(`history:${safeUser}:${safeDialog}`);
         }
-        ctx.waitUntil(botReply(env, chatId, "История диалога очищена ✅"));
+        ctx.waitUntil(botReply(env, chatId, "История диалога очищена ✅", webhookBotId));
         return json({ ok: true });
       }
 
@@ -2069,7 +2144,7 @@ export default {
             console.log("⌨️ Showing typing indicator...", { chatId });
             // Показать "печатает..." (imbot.sendtyping — официальный метод для ботов)
             await b24(env, "imbot.sendtyping", {
-              BOT_ID: env.BOT_ID,
+              BOT_ID: webhookBotId,
               CLIENT_ID: env.CLIENT_ID,
               DIALOG_ID: chatId,
             }).catch((e) => console.error("imbot.sendtyping error:", e));
@@ -2101,7 +2176,7 @@ export default {
               console.error("⚠️ Gemini returned empty response, using fallback", { chatId });
               const fallbackText = "Извините, не удалось сформировать ответ. Попробуйте переформулировать вопрос.";
               responseAttempted = true;
-              await botReply(env, chatId, fallbackText);
+              await botReply(env, chatId, fallbackText, webhookBotId);
               console.log("✅ Fallback reply sent successfully", { chatId });
               return;
             }
@@ -2112,7 +2187,7 @@ export default {
 
             console.log("📤 Sending bot reply...", { chatId, textLength: text.length });
             responseAttempted = true;
-            await botReply(env, chatId, text);
+            await botReply(env, chatId, text, webhookBotId);
             console.log("✅ Bot reply sent successfully", { chatId, userId });
           } catch (e) {
             // Не показывать сырые внутренние ошибки пользователю
@@ -2132,7 +2207,7 @@ export default {
 
             try {
               console.log("📤 Attempting to send error message to user...", { chatId });
-              await botReply(env, chatId, safeMessage);
+              await botReply(env, chatId, safeMessage, webhookBotId);
               console.log("✅ Error message sent to user", { chatId });
             } catch (replyErr) {
               console.error("❌ CRITICAL: Failed to send error reply:", {
