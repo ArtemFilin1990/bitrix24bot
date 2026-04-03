@@ -2085,16 +2085,19 @@ export default {
       try {
         const workerUrl = `https://${env.WORKER_HOST}`;
         const result = await b24(env, "imbot.v2.Bot.register", {
-          code: "everest_expert_v3",
-          botToken: env.B24_APP_TOKEN,
-          properties: {
-            name: "ИИ-эксперт Эверест",
-            lastName: "",
-            color: "GREEN",
-            type: "B",
-            openLine: "N",
+          fields: {
+            code: "everest_expert_v3",
+            botToken: env.B24_APP_TOKEN,
+            properties: {
+              name: "ИИ-эксперт Эверест",
+              workPosition: "AI Assistant",
+              personalWww: "https://ewerest.ru",
+              color: "AQUA",
+            },
+            type: "supervisor",
+            eventMode: "webhook",
+            webhookUrl: `${workerUrl}/imbot`,
           },
-          eventHandlerUrl: `${workerUrl}/imbot`,
         });
         const newBotId = result;
         let commands = [];
