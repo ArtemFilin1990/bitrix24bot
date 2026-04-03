@@ -2551,7 +2551,9 @@ export default {
           if (e.message === "TOTAL_TIMEOUT") {
             timedOut = true;
             console.error("⏱️ Total processing timeout exceeded (55s)", { chatId, userId });
-            await botReply(env, chatId, "⚠️ Обработка заняла слишком много времени. Попробуйте упростить вопрос.", webhookBotId).catch(() => {});
+            await botReply(env, chatId, "⚠️ Обработка заняла слишком много времени. Попробуйте упростить вопрос.", webhookBotId).catch((err) => {
+              console.error("❌ Failed to send timeout message:", { chatId, error: err.message });
+            });
           }
         }),
       );
