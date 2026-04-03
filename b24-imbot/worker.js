@@ -2061,6 +2061,21 @@ export default {
       }
     }
 
+    // Диагностика: показать что видит воркер при входящем вебхуке (ВРЕМЕННО)
+    if (url.pathname === "/debug-webhook" && request.method === "POST") {
+      const body = await request.text();
+      const data = Object.fromEntries(new URLSearchParams(body));
+      return json({
+        event: data["event"],
+        appToken: data["auth[application_token]"]?.slice(0, 15) + "...",
+        userId: data["data[USER][ID]"],
+        chatId: data["data[PARAMS][DIALOG_ID]"],
+        message: data["data[PARAMS][MESSAGE]"]?.slice(0, 50),
+        botId: data["data[BOT_ID]"],
+        allKeys: Object.keys(data).slice(0, 20),
+      });
+    }
+
     // Основной обработчик событий от Bitrix24
     if (url.pathname === "/imbot" && request.method === "POST") {
       const body = await request.text();
@@ -2068,6 +2083,11 @@ export default {
 
       // Валидация токена приложения (защита от неавторизованных запросов)
       const appToken = data["auth[application_token]"];
+      console.log("🔑 Webhook auth check:", {
+        receivedToken: appToken ? appToken.slice(0, 10) + "..." : "(none)",
+        envTokenSet: !!env.B24_APP_TOKEN,
+        match: appToken === env.B24_APP_TOKEN,
+      });
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
         console.error("Webhook rejected: invalid app token", {
           appToken: appToken?.slice(0, 10) + "...",
