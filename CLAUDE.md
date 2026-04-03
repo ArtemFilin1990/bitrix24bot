@@ -136,7 +136,9 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 
 **Group chat filtering**: Bot only responds in group chats if message contains one of the KEYWORDS (подшипник, артикул, сделка, клиент, цена, стоимость, скидка, кп, коммерческ, заказ, поставка, наличие, срок, каталог, аналог, etc.) or the bot is @-mentioned. Private chats always get a response.
 
-**Bot slash commands**: `/подшипник` (search), `/аналог` (analogs), `/статус` (status) — registered via `registerBotCommands()` during `/register`. Additional commands `/помощь` (help) and `/сброс` (reset history) are handled as message listeners in the webhook handler.
+**Registered slash commands**: `/подшипник` (search), `/аналог` (analogs), `/статус` (status) — registered via `registerBotCommands()` during `/register`.
+
+**Built-in chat commands**: `/помощь` (help), `/сброс` (reset history), `/start` — handled in the normal webhook message flow (`ONIMBOTMESSAGEADD`), not via `imbot.v2.Command.register`.
 
 **Typing indicator**: The bot sends `imbot.sendtyping` before AI processing to show a typing animation in Bitrix24.
 
@@ -147,7 +149,7 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 | `/imbot` | POST | B24_APP_TOKEN | Main webhook for incoming Bitrix24 messages |
 | `/register` | GET | IMPORT_SECRET | Register bot with Bitrix24 + register slash commands |
 | `/send` | POST | IMPORT_SECRET | Remote control: send message to any Bitrix24 chat |
-| `/reset` | POST | None | Clear a user's conversation history in KV |
+| `/reset` | POST | None | Clear conversation history in KV; requires JSON body with `user_id` and `dialog_id` |
 | `/status` | GET | IMPORT_SECRET | Health check: shows all config bindings and secret presence |
 | `/import-catalog` | GET | IMPORT_SECRET | Import semicolon-delimited CSV from Bitrix24 Disk |
 | `/import-catalog-csv` | GET | IMPORT_SECRET | Import extended CSV with auto-detected columns |
