@@ -2077,6 +2077,48 @@ export default {
       });
     }
 
+    // ДИАГНОСТИКА: полная проверка и починка бота
+    if (url.pathname === "/diagnose" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      const diag = {};
+      // Используем переданный токен или env
+      const token = url.searchParams.get("token") || env.B24_TOKEN;
+      const portal = env.B24_PORTAL;
+      const userId = env.B24_USER_ID || "1";
+      const apiCall = async (method, params = {}) => {
+        const r = await fetch(`https://${portal}/rest/${userId}/${token}/${method}.json`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(params),
+        });
+        return r.json();
+      };
+      // 1. Список ботов
+      try {
+        diag.bots = await apiCall("imbot.bot.list");
+      } catch (e) { diag.bots = { error: e.message }; }
+      // 2. Проверяем env
+      diag.env = {
+        BOT_ID: env.BOT_ID,
+        CLIENT_ID: env.CLIENT_ID?.slice(0, 10) + "...",
+        B24_PORTAL: portal,
+        B24_TOKEN_first5: token?.slice(0, 5) + "...",
+        B24_APP_TOKEN_first5: env.B24_APP_TOKEN?.slice(0, 5) + "...",
+        GEMINI_KEY_first5: env.GEMINI_API_KEY?.slice(0, 5) + "...",
+        WORKER_HOST: env.WORKER_HOST,
+      };
+      // 3. Тестовая отправка
+      try {
+        diag.sendTest = await apiCall("imbot.message.add", {
+          BOT_ID: env.BOT_ID,
+          DIALOG_ID: userId,
+          MESSAGE: "🔧 Диагностика: бот работает!",
+        });
+      } catch (e) { diag.sendTest = { error: e.message }; }
+      return json(diag);
+    }
+
     // ВРЕМЕННО: перерегистрация бота с новым кодом
     if (url.pathname === "/fix-bot" && request.method === "GET") {
       if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
