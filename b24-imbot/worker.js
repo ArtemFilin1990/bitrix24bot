@@ -2108,14 +2108,31 @@ export default {
         GEMINI_KEY_first5: env.GEMINI_API_KEY?.slice(0, 5) + "...",
         WORKER_HOST: env.WORKER_HOST,
       };
-      // 3. Тестовая отправка
+      // 3. Тестовая отправка — пробуем разные варианты
+      // Вариант A: imbot.message.add с CLIENT_ID
       try {
-        diag.sendTest = await apiCall("imbot.message.add", {
+        diag.sendA = await apiCall("imbot.message.add", {
+          BOT_ID: env.BOT_ID,
+          CLIENT_ID: env.CLIENT_ID,
+          DIALOG_ID: userId,
+          MESSAGE: "🔧 Тест A: с CLIENT_ID",
+        });
+      } catch (e) { diag.sendA = { error: e.message }; }
+      // Вариант B: imbot.message.add без CLIENT_ID
+      try {
+        diag.sendB = await apiCall("imbot.message.add", {
           BOT_ID: env.BOT_ID,
           DIALOG_ID: userId,
-          MESSAGE: "🔧 Диагностика: бот работает!",
+          MESSAGE: "🔧 Тест B: без CLIENT_ID",
         });
-      } catch (e) { diag.sendTest = { error: e.message }; }
+      } catch (e) { diag.sendB = { error: e.message }; }
+      // Вариант C: im.message.add (от имени пользователя)
+      try {
+        diag.sendC = await apiCall("im.message.add", {
+          DIALOG_ID: userId,
+          MESSAGE: "🔧 Тест C: im.message.add",
+        });
+      } catch (e) { diag.sendC = { error: e.message }; }
       return json(diag);
     }
 
