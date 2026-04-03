@@ -68,7 +68,7 @@ CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
 wrangler secret put B24_PORTAL          # ewerest.bitrix24.ru
 wrangler secret put B24_USER_ID         # 1
 wrangler secret put B24_TOKEN           # запасной путь (если не задан BITRIX_WEBHOOK_URL)
-wrangler secret put BITRIX_WEBHOOK_URL  # https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/
+wrangler secret put BITRIX_WEBHOOK_URL  # https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/ (строго /rest/<user>/<token>/)
 
 # Безопасность
 wrangler secret put B24_APP_TOKEN       # z9rxpcoeaslfm10j04vybah79h2jumma

@@ -563,6 +563,46 @@ describe('Bitrix24 webhook base URL selection', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('falls back to B24_PORTAL/B24_USER_ID/B24_TOKEN for invalid BITRIX_WEBHOOK_URL', async () => {
+    const mockFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ result: 1 }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const res = await worker.fetch(
+        makeRequest('/send', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            secret:  'test-secret',
+            chat_id: '42',
+            text:    'Проверка fallback',
+          }),
+        }),
+        makeEnv({
+          B24_PORTAL:          'portal.example.com',
+          B24_USER_ID:         '77',
+          B24_TOKEN:           'fallback-token',
+          BITRIX_WEBHOOK_URL:  'https://portal.example.com/not-a-webhook',
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[0])).toContain(
+        'https://portal.example.com/rest/77/fallback-token/imbot.message.add.json',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 // ── ONIMCOMMANDADD slash-command handling ─────────────────────────────────────

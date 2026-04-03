@@ -233,19 +233,31 @@ function getB24BaseUrl(env) {
   if (rawWebhook) {
     try {
       const parsed = new URL(rawWebhook);
-      if (parsed.protocol === "https:") {
-        const prefix = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
-        return `${parsed.origin}${prefix}`;
-      }
+      if (parsed.protocol !== "https:") throw new Error("Webhook must use https");
+      // Формат Bitrix24 incoming webhook: /rest/<user_id>/<token>/
+      const isBitrixWebhookPath = /^\/rest\/[^/]+\/[^/]+\/?$/.test(parsed.pathname);
+      if (!isBitrixWebhookPath) throw new Error("Webhook path must match /rest/<user>/<token>/");
+      const prefix = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
+      return `${parsed.origin}${prefix}`;
     } catch (e) {
-      console.error("Invalid BITRIX_WEBHOOK_URL, fallback to B24_PORTAL/B24_USER_ID/B24_TOKEN");
+      console.error("Invalid BITRIX_WEBHOOK_URL, fallback to B24_PORTAL/B24_USER_ID/B24_TOKEN", {
+        reason: e?.message || String(e),
+      });
     }
   }
   return `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/`;
 }
 
+function buildB24MethodUrl(baseUrl, method) {
+  const safeMethod = String(method || "").trim();
+  if (!/^[a-z0-9._]+$/i.test(safeMethod)) {
+    throw new Error(`Invalid B24 method: ${safeMethod}`);
+  }
+  return `${baseUrl}${safeMethod}.json`;
+}
+
 async function b24(env, method, params = {}) {
-  const url = `${getB24BaseUrl(env)}${method}.json`;
+  const url = buildB24MethodUrl(getB24BaseUrl(env), method);
   console.log(`🔗 B24 API call: ${method}`, { params: JSON.stringify(params).slice(0, 100) });
   const r = await fetchWithTimeout(url, {
     method: "POST",
@@ -1632,7 +1644,7 @@ export default {
             };
           }
 
-          const apiUrl = `${getB24BaseUrl(env)}${endpoint}.json`;
+          const apiUrl = buildB24MethodUrl(getB24BaseUrl(env), endpoint);
           const resp = await fetchWithTimeout(apiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
