@@ -2020,6 +2020,7 @@ export default {
       const check = (v) => (v ? "✅" : "❌ missing");
       return json({
         ok: true,
+        version: "2026-04-03-v2",
         config: {
           BOT_ID: check(env.BOT_ID),
           CLIENT_ID: check(env.CLIENT_ID),
