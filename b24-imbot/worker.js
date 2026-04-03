@@ -253,8 +253,36 @@ const TOOLS = [
 ];
 
 // ── B24 helpers ───────────────────────────────────────────
+function getB24BaseUrl(env) {
+  const rawWebhook = String(env.BITRIX_WEBHOOK_URL || "").trim();
+  if (rawWebhook) {
+    try {
+      const parsed = new URL(rawWebhook);
+      if (parsed.protocol !== "https:") throw new Error("Webhook must use https");
+      // Формат Bitrix24 incoming webhook: /rest/<user_id>/<token>/
+      const isBitrixWebhookPath = /^\/rest\/[^/]+\/[^/]+\/?$/.test(parsed.pathname);
+      if (!isBitrixWebhookPath) throw new Error("Webhook path must match /rest/<user>/<token>/");
+      const prefix = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
+      return `${parsed.origin}${prefix}`;
+    } catch (e) {
+      console.error("Invalid BITRIX_WEBHOOK_URL, fallback to B24_PORTAL/B24_USER_ID/B24_TOKEN", {
+        reason: e?.message || String(e),
+      });
+    }
+  }
+  return `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/`;
+}
+
+function buildB24MethodUrl(baseUrl, method) {
+  const safeMethod = String(method || "").trim();
+  if (!/^[a-z0-9._]+$/i.test(safeMethod)) {
+    throw new Error(`Invalid B24 method: ${safeMethod}`);
+  }
+  return `${baseUrl}${safeMethod}.json`;
+}
+
 async function b24(env, method, params = {}) {
-  const url = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${method}.json`;
+  const url = buildB24MethodUrl(getB24BaseUrl(env), method);
   console.log(`🔗 B24 API call: ${method}`, { params: JSON.stringify(params).slice(0, 100) });
   const r = await fetchWithTimeout(url, {
     method: "POST",
@@ -998,6 +1026,32 @@ const GEMINI_TOOLS = [
   },
 ];
 
+const MAX_USER_MESSAGE_CHARS = 3500;
+const EVIDENCE_TOOLS = new Set([
+  "search_catalog",
+  "search_analogs",
+  "search_knowledge",
+  "search_brand",
+]);
+
+function isBearingFactQuestion(text) {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return false;
+  const withoutContext = normalized.replace(/^\[контекст:[\s\S]*?\]\s*/i, "");
+  return (
+    /\b\d{4,6}(?:[-/](?:2rs|2rz|2z|zz|c3|c4))?\b/i.test(withoutContext) ||
+    /(подшип|аналог|размер|маркиров|обознач|гост|iso|наличи|склад|цена|остат)/i.test(withoutContext)
+  );
+}
+
+function enforceEvidencePolicy(responseText, userText, usedToolNames) {
+  const text = String(responseText || "").trim() || "—";
+  if (!isBearingFactQuestion(userText)) return text;
+  const hasEvidence = [...usedToolNames].some((name) => EVIDENCE_TOOLS.has(name));
+  if (hasEvidence) return text;
+  return `${text}\n\n[I]⚠️ Ответ без подтверждения из базы. Для точного подбора укажите артикул или размеры d×D×B — проверю по каталогу и аналогам.[/I]`;
+}
+
 async function askGemini(env, history, userText) {
   const MODEL = env.GEMINI_MODEL || "gemini-2.5-flash";
   const URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
@@ -1005,17 +1059,7 @@ async function askGemini(env, history, userText) {
   console.log(`🤖 askGemini: model=${MODEL}, historyLength=${history.length}`);
 
   const contents = [...history, { role: "user", parts: [{ text: userText }] }];
-  const currentTurnStart = contents.length; // индекс начала записей текущего хода
 
-  for (let i = 0; i < 8; i++) {
-    console.log(`🔄 Gemini iteration ${i + 1}/8`);
-    const geminiBody = JSON.stringify({
-      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents,
-      tools: GEMINI_TOOLS,
-      generationConfig: { maxOutputTokens: 4096, temperature: 0.1 },
-    });
-    let r = await fetchWithTimeout(URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: geminiBody,
@@ -1066,41 +1110,7 @@ async function askGemini(env, history, userText) {
         .filter((p) => p.text)
         .map((p) => p.text)
         .join("") || "—";
-      // Проверка причины завершения
-      const finishReason = candidate.finishReason;
-      if (finishReason === "MAX_TOKENS") {
-        console.warn("⚠️ Gemini: response truncated (MAX_TOKENS)");
-        responseText += "\n\n[I]...ответ сокращён. Задайте уточняющий вопрос для продолжения.[/I]";
-      }
-      // Пост-обработка: детект потенциальных галлюцинаций
-      // Ищем ТОЛЬКО в текущем ходе (не в истории) результаты инструментов с found:0
-      const toolResults = contents
-        .slice(currentTurnStart)
-        .filter((c) => c.role === "function")
-        .flatMap((c) => c.parts || []);
-      for (const tr of toolResults) {
-        try {
-          const res = tr.functionResponse;
-          if (!res) continue;
-          const parsed = typeof res.response?.result === "string"
-            ? JSON.parse(res.response.result) : null;
-          if (!parsed || parsed.found !== 0) continue;
 
-          if (res.name === "search_catalog" && /\d+\s*(руб|₽|шт)/i.test(responseText)) {
-            responseText += "\n\n[I]⚠️ Внимание: данные о цене/наличии не подтверждены каталогом Эверест. Уточните у менеджера.[/I]";
-            break;
-          }
-          if (res.name === "search_analogs" && /аналог/i.test(responseText) && /\d{3,}/i.test(responseText)) {
-            responseText += "\n\n[I]⚠️ Указанные аналоги не подтверждены базой Эверест. Требуется проверка по габаритам (d, D, B).[/I]";
-            break;
-          }
-        } catch { /* skip parse errors */ }
-      }
-
-      console.log(`✅ Gemini: final response (${responseText.length} chars, finishReason=${finishReason})`);
-      return {
-        text: responseText,
-        history: contents.slice(-20),
       };
     }
 
@@ -1111,6 +1121,7 @@ async function askGemini(env, history, userText) {
         let resultStr;
         try {
           console.log(`  🔨 Tool: ${p.functionCall.name}`, p.functionCall.args);
+          usedToolNames.add(p.functionCall.name);
           resultStr = await executeTool(
             env,
             p.functionCall.name,
@@ -1714,7 +1725,7 @@ export default {
             };
           }
 
-          const apiUrl = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${endpoint}.json`;
+          const apiUrl = buildB24MethodUrl(getB24BaseUrl(env), endpoint);
           const resp = await fetchWithTimeout(apiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2035,6 +2046,7 @@ export default {
           CLIENT_ID: check(env.CLIENT_ID),
           GEMINI_API_KEY: check(env.GEMINI_API_KEY),
           GEMINI_MODEL: env.GEMINI_MODEL || "gemini-2.5-flash (default)",
+          BITRIX_WEBHOOK_URL: check(env.BITRIX_WEBHOOK_URL),
           B24_PORTAL: check(env.B24_PORTAL),
           B24_USER_ID: check(env.B24_USER_ID),
           B24_TOKEN: check(env.B24_TOKEN),
@@ -2233,36 +2245,7 @@ export default {
       }
 
       const event = data["event"];
-      const userId = data["data[USER][ID]"];
-      const chatId =
-        data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
-      const message = data["data[PARAMS][MESSAGE]"]?.trim();
 
-      // ДИАГНОСТИКА: простой пинг-понг чтобы проверить доходят ли вебхуки
-      if (event === "ONIMBOTMESSAGEADD" && chatId && message === "ping") {
-        const diagBotId = data["data[BOT_ID]"] || env.BOT_ID;
-        ctx.waitUntil((async () => {
-          try {
-            await botReply(env, chatId, `pong! bot=${diagBotId} env.BOT_ID=${env.BOT_ID} chat=${chatId}`, diagBotId);
-          } catch (e1) {
-            console.error("DIAG pong error with diagBotId:", e1.message);
-            // Попробуем без CLIENT_ID — напрямую через REST
-            try {
-              const url = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/imbot.message.add.json`;
-              const r = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ BOT_ID: diagBotId, DIALOG_ID: chatId, MESSAGE: `DIAG ERROR: ${e1.message}` }),
-              });
-              const d = await r.json();
-              console.error("DIAG fallback result:", d);
-            } catch (e2) {
-              console.error("DIAG fallback also failed:", e2.message);
-            }
-          }
-        })());
-        return json({ ok: true });
-      }
       // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
       // которому адресовано сообщение (ID в чате может отличаться от env.BOT_ID)
       const webhookBotId = data["data[BOT_ID]"] || env.BOT_ID;
@@ -2298,20 +2281,27 @@ export default {
             cmdChatId = data[`data[COMMAND][${cmdId}][DIALOG_ID]`] || cmdChatId;
           }
         }
+        const safeCmdChatId = sanitizeId(cmdChatId);
+        const safeCmdUserId = sanitizeId(cmdUserId);
 
-        console.log("⌨️ Slash command received:", { commandName, commandParams, cmdChatId, cmdUserId });
-        if (commandName && cmdChatId) {
+        console.log("⌨️ Slash command received:", {
+          commandName,
+          commandParams,
+          cmdChatId: safeCmdChatId,
+          cmdUserId: safeCmdUserId,
+        });
+        if (commandName && safeCmdChatId && safeCmdUserId) {
           ctx.waitUntil((async () => {
             try {
               await b24(env, "imbot.sendtyping", {
                 BOT_ID: webhookBotId,
                 CLIENT_ID: env.CLIENT_ID,
-                DIALOG_ID: cmdChatId,
+                DIALOG_ID: safeCmdChatId,
               }).catch((e) => console.error("imbot.sendtyping error:", e));
               // Команда /статус — прямой ответ без Gemini
               if (commandName === "статус") {
                 const check = (v) => (v ? "✅" : "❌");
-                await botReply(env, cmdChatId,
+                await botReply(env, safeCmdChatId,
                   `[B]Статус бота Алексей (Эверест)[/B]\n\n` +
                   `• Gemini API: ${check(env.GEMINI_API_KEY)}\n` +
                   `• Bitrix24: ${check(env.B24_PORTAL)}\n` +
@@ -2328,13 +2318,13 @@ export default {
                 "аналог": `Найди аналоги подшипника: ${commandParams}`,
               };
               const prompt = promptTemplates[commandName] || commandParams;
-              const history = await getHistory(env, cmdUserId, cmdChatId);
+              const history = await getHistory(env, safeCmdUserId, safeCmdChatId);
               const { text, history: newHistory } = await askGemini(env, history, prompt);
-              await saveHistory(env, cmdUserId, cmdChatId, newHistory);
-              await botReply(env, cmdChatId, text, webhookBotId);
+              await saveHistory(env, safeCmdUserId, safeCmdChatId, newHistory);
+              await botReply(env, safeCmdChatId, text, webhookBotId);
             } catch (e) {
-              console.error("❌ Error in slash command handler:", { error: e.message, commandName, cmdChatId });
-              await botReply(env, cmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
+              console.error("❌ Error in slash command handler:", { error: e.message, commandName, safeCmdChatId });
+              await botReply(env, safeCmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
             }
           })());
         }
@@ -2344,6 +2334,17 @@ export default {
       // Обработать только входящие сообщения боту
       if (event !== "ONIMBOTMESSAGEADD" || !message || message === "undefined" || message === "null" || !userId || !chatId) {
         console.log("⏭️ Webhook skipped:", { event, hasMessage: !!message, userId, chatId });
+        return json({ ok: true });
+      }
+      if (rawMessage && rawMessage.length > MAX_USER_MESSAGE_CHARS) {
+        ctx.waitUntil(
+          botReply(
+            env,
+            chatId,
+            `⚠️ Сообщение слишком длинное (${rawMessage.length} символов). Отправьте вопрос частями до ${MAX_USER_MESSAGE_CHARS} символов.`,
+            webhookBotId,
+          ).catch(() => {}),
+        );
         return json({ ok: true });
       }
 
