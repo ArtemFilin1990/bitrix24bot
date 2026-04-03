@@ -22,7 +22,7 @@
 | Параметр | Значение |
 |----------|----------|
 | **Portal** | ewerest.bitrix24.ru |
-| **Webhook URL** | https://ewerest.bitrix24.ru/rest/1/p7mpsrj88h2ustgk/ |
+| **Webhook URL** | https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/ |
 | **Application Token** | z9rxpcoeaslfm10j04vybah79h2jumma |
 
 ## События (Webhooks)
@@ -67,7 +67,8 @@ CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
 # Bitrix24 REST API
 wrangler secret put B24_PORTAL          # ewerest.bitrix24.ru
 wrangler secret put B24_USER_ID         # 1
-wrangler secret put B24_TOKEN           # p7mpsrj88h2ustgk
+wrangler secret put B24_TOKEN           # запасной путь (если не задан BITRIX_WEBHOOK_URL)
+wrangler secret put BITRIX_WEBHOOK_URL  # https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/
 
 # Безопасность
 wrangler secret put B24_APP_TOKEN       # z9rxpcoeaslfm10j04vybah79h2jumma

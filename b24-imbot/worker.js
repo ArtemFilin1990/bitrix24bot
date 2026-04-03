@@ -228,8 +228,24 @@ const TOOLS = [
 ];
 
 // ── B24 helpers ───────────────────────────────────────────
+function getB24BaseUrl(env) {
+  const rawWebhook = String(env.BITRIX_WEBHOOK_URL || "").trim();
+  if (rawWebhook) {
+    try {
+      const parsed = new URL(rawWebhook);
+      if (parsed.protocol === "https:") {
+        const prefix = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
+        return `${parsed.origin}${prefix}`;
+      }
+    } catch (e) {
+      console.error("Invalid BITRIX_WEBHOOK_URL, fallback to B24_PORTAL/B24_USER_ID/B24_TOKEN");
+    }
+  }
+  return `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/`;
+}
+
 async function b24(env, method, params = {}) {
-  const url = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${method}.json`;
+  const url = `${getB24BaseUrl(env)}${method}.json`;
   console.log(`🔗 B24 API call: ${method}`, { params: JSON.stringify(params).slice(0, 100) });
   const r = await fetchWithTimeout(url, {
     method: "POST",
@@ -911,6 +927,32 @@ const GEMINI_TOOLS = [
   },
 ];
 
+const MAX_USER_MESSAGE_CHARS = 3500;
+const EVIDENCE_TOOLS = new Set([
+  "search_catalog",
+  "search_analogs",
+  "search_knowledge",
+  "search_brand",
+]);
+
+function isBearingFactQuestion(text) {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return false;
+  const withoutContext = normalized.replace(/^\[контекст:[\s\S]*?\]\s*/i, "");
+  return (
+    /\b\d{4,6}(?:[-/](?:2rs|2rz|2z|zz|c3|c4))?\b/i.test(withoutContext) ||
+    /(подшип|аналог|размер|маркиров|обознач|гост|iso|наличи|склад|цена|остат)/i.test(withoutContext)
+  );
+}
+
+function enforceEvidencePolicy(responseText, userText, usedToolNames) {
+  const text = String(responseText || "").trim() || "—";
+  if (!isBearingFactQuestion(userText)) return text;
+  const hasEvidence = [...usedToolNames].some((name) => EVIDENCE_TOOLS.has(name));
+  if (hasEvidence) return text;
+  return `${text}\n\n[I]⚠️ Ответ без подтверждения из базы. Для точного подбора укажите артикул или размеры d×D×B — проверю по каталогу и аналогам.[/I]`;
+}
+
 async function askGemini(env, history, userText) {
   const MODEL = env.GEMINI_MODEL || "gemini-2.5-flash";
   const URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
@@ -918,6 +960,7 @@ async function askGemini(env, history, userText) {
   console.log(`🤖 askGemini: model=${MODEL}, historyLength=${history.length}`);
 
   const contents = [...history, { role: "user", parts: [{ text: userText }] }];
+  const usedToolNames = new Set();
 
   for (let i = 0; i < 5; i++) {
     console.log(`🔄 Gemini iteration ${i + 1}/5`);
@@ -966,9 +1009,14 @@ async function askGemini(env, history, userText) {
         .filter((p) => p.text)
         .map((p) => p.text)
         .join("") || "—";
+      const groundedResponse = enforceEvidencePolicy(
+        responseText,
+        userText,
+        usedToolNames,
+      );
       console.log(`✅ Gemini: final response (${responseText.length} chars)`);
       return {
-        text: responseText,
+        text: groundedResponse,
         history: contents.slice(-20), // хранить последние 20 turns
       };
     }
@@ -980,6 +1028,7 @@ async function askGemini(env, history, userText) {
         let resultStr;
         try {
           console.log(`  🔨 Tool: ${p.functionCall.name}`, p.functionCall.args);
+          usedToolNames.add(p.functionCall.name);
           resultStr = await executeTool(
             env,
             p.functionCall.name,
@@ -1583,7 +1632,7 @@ export default {
             };
           }
 
-          const apiUrl = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/${endpoint}.json`;
+          const apiUrl = `${getB24BaseUrl(env)}${endpoint}.json`;
           const resp = await fetchWithTimeout(apiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1903,6 +1952,7 @@ export default {
           CLIENT_ID: check(env.CLIENT_ID),
           GEMINI_API_KEY: check(env.GEMINI_API_KEY),
           GEMINI_MODEL: env.GEMINI_MODEL || "gemini-2.5-flash (default)",
+          BITRIX_WEBHOOK_URL: check(env.BITRIX_WEBHOOK_URL),
           B24_PORTAL: check(env.B24_PORTAL),
           B24_USER_ID: check(env.B24_USER_ID),
           B24_TOKEN: check(env.B24_TOKEN),
@@ -1955,10 +2005,12 @@ export default {
       }
 
       const event = data["event"];
-      const userId = data["data[USER][ID]"];
-      const chatId =
-        data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
-      const message = data["data[PARAMS][MESSAGE]"]?.trim();
+      const userId = sanitizeId(data["data[USER][ID]"]);
+      const chatId = sanitizeId(
+        data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"],
+      );
+      const rawMessage = data["data[PARAMS][MESSAGE]"]?.trim();
+      const message = rawMessage ? rawMessage.slice(0, MAX_USER_MESSAGE_CHARS) : "";
       // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
       // которому адресовано сообщение (ID в чате может отличаться от env.BOT_ID)
       const webhookBotId = data["data[BOT_ID]"] || env.BOT_ID;
@@ -1994,20 +2046,27 @@ export default {
             cmdChatId = data[`data[COMMAND][${cmdId}][DIALOG_ID]`] || cmdChatId;
           }
         }
+        const safeCmdChatId = sanitizeId(cmdChatId);
+        const safeCmdUserId = sanitizeId(cmdUserId);
 
-        console.log("⌨️ Slash command received:", { commandName, commandParams, cmdChatId, cmdUserId });
-        if (commandName && cmdChatId) {
+        console.log("⌨️ Slash command received:", {
+          commandName,
+          commandParams,
+          cmdChatId: safeCmdChatId,
+          cmdUserId: safeCmdUserId,
+        });
+        if (commandName && safeCmdChatId && safeCmdUserId) {
           ctx.waitUntil((async () => {
             try {
               await b24(env, "imbot.sendtyping", {
                 BOT_ID: webhookBotId,
                 CLIENT_ID: env.CLIENT_ID,
-                DIALOG_ID: cmdChatId,
+                DIALOG_ID: safeCmdChatId,
               }).catch((e) => console.error("imbot.sendtyping error:", e));
               // Команда /статус — прямой ответ без Gemini
               if (commandName === "статус") {
                 const check = (v) => (v ? "✅" : "❌");
-                await botReply(env, cmdChatId,
+                await botReply(env, safeCmdChatId,
                   `[B]Статус бота Алексей (Эверест)[/B]\n\n` +
                   `• Gemini API: ${check(env.GEMINI_API_KEY)}\n` +
                   `• Bitrix24: ${check(env.B24_PORTAL)}\n` +
@@ -2024,13 +2083,13 @@ export default {
                 "аналог": `Найди аналоги подшипника: ${commandParams}`,
               };
               const prompt = promptTemplates[commandName] || commandParams;
-              const history = await getHistory(env, cmdUserId, cmdChatId);
+              const history = await getHistory(env, safeCmdUserId, safeCmdChatId);
               const { text, history: newHistory } = await askGemini(env, history, prompt);
-              await saveHistory(env, cmdUserId, cmdChatId, newHistory);
-              await botReply(env, cmdChatId, text, webhookBotId);
+              await saveHistory(env, safeCmdUserId, safeCmdChatId, newHistory);
+              await botReply(env, safeCmdChatId, text, webhookBotId);
             } catch (e) {
-              console.error("❌ Error in slash command handler:", { error: e.message, commandName, cmdChatId });
-              await botReply(env, cmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
+              console.error("❌ Error in slash command handler:", { error: e.message, commandName, safeCmdChatId });
+              await botReply(env, safeCmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
             }
           })());
         }
@@ -2040,6 +2099,17 @@ export default {
       // Обработать только входящие сообщения боту
       if (event !== "ONIMBOTMESSAGEADD" || !message || !userId || !chatId) {
         console.log("⏭️ Webhook skipped:", { event, hasMessage: !!message, userId, chatId });
+        return json({ ok: true });
+      }
+      if (rawMessage && rawMessage.length > MAX_USER_MESSAGE_CHARS) {
+        ctx.waitUntil(
+          botReply(
+            env,
+            chatId,
+            `⚠️ Сообщение слишком длинное (${rawMessage.length} символов). Отправьте вопрос частями до ${MAX_USER_MESSAGE_CHARS} символов.`,
+            webhookBotId,
+          ).catch(() => {}),
+        );
         return json({ ok: true });
       }
 
@@ -2116,7 +2186,7 @@ export default {
             `• Помогать с текстами (КП, письма)\n\n` +
             (isGroupChat
               ? `[I]В групповом чате реагирую на слова: подшипник, сделка, КП, цена, скидка, заказ, поставка, наличие, артикул...[/I]\n\n`
-              : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`) +
+              : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`)
 
         );
         return json({ ok: true });

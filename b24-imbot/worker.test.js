@@ -434,6 +434,137 @@ describe('Built-in commands in personal chat', () => {
   });
 });
 
+describe('Reliability and anti-hallucination guards', () => {
+  it('adds evidence warning when Gemini answers bearing question without tool calls', async () => {
+    const mockFetch = makeApiFetchMock('Да, подходит.');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]':   'Подойдет ли подшипник 6205?',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[1].body)).toContain('Ответ без подтверждения из базы');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects too long user message with explicit limit response', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+    const longMessage = 'а'.repeat(3600);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]':   longMessage,
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+      expect(res.status).toBe(200);
+
+      const geminiCalls = mockFetch.mock.calls.filter(([url]) =>
+        String(url).includes('generativelanguage.googleapis.com'),
+      );
+      expect(geminiCalls.length).toBe(0);
+
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(String(messageAddCall[1].body)).toContain('Сообщение слишком длинное');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not add evidence warning for non-bearing message containing small numeric ids', async () => {
+    const mockFetch = makeApiFetchMock('Ок, посмотрел сделку.');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': 'chat123',
+          'data[PARAMS][MESSAGE]':   'Проверь сделка 123',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[1].body)).not.toContain('Ответ без подтверждения из базы');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('Bitrix24 webhook base URL selection', () => {
+  it('uses BITRIX_WEBHOOK_URL for REST calls when provided', async () => {
+    const mockFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ result: 1 }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const res = await worker.fetch(
+        makeRequest('/send', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            secret:  'test-secret',
+            chat_id: '42',
+            text:    'Проверка вебхука',
+          }),
+        }),
+        makeEnv({
+          BITRIX_WEBHOOK_URL: 'https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/',
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[0])).toContain(
+        'https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/imbot.message.add.json',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 // ── ONIMCOMMANDADD slash-command handling ─────────────────────────────────────
 
 describe('ONIMCOMMANDADD slash-command handling', () => {
