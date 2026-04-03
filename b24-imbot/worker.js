@@ -329,47 +329,42 @@ async function botReply(env, chatId, text, botId = null) {
     console.error("❌ botReply: invalid text", { text: typeof text });
     throw new Error("botReply: text must be a non-empty string");
   }
-  if (!effectiveBotId) {
-    console.error("❌ botReply: missing BOT_ID in environment");
-    throw new Error("botReply: BOT_ID not configured");
-  }
-  if (!env.CLIENT_ID) {
-    console.error("❌ botReply: missing CLIENT_ID in environment");
-    throw new Error("botReply: CLIENT_ID not configured");
-  }
 
+  // Основной метод: im.message.add (работает через webhook REST-токен)
   try {
-    const result = await b24(env, "imbot.message.add", {
-      BOT_ID: effectiveBotId,
-      CLIENT_ID: env.CLIENT_ID,
+    const result = await b24(env, "im.message.add", {
       DIALOG_ID: chatId,
       MESSAGE: text,
+      SYSTEM: "N",
     });
-    console.log(`✅ botReply success:`, { chatId, messageId: result?.message_id || 'unknown', effectiveBotId });
+    console.log(`✅ botReply success (im.message.add):`, { chatId, result });
     return result;
   } catch (error) {
-    console.warn(`⚠️ imbot.message.add failed, trying im.message.add fallback:`, {
+    console.warn(`⚠️ im.message.add failed, trying imbot.message.add fallback:`, {
       chatId,
       error: error.message,
-      effectiveBotId,
     });
-    // Fallback: im.message.add works when webhook owns the REST token
-    try {
-      const fbResult = await b24(env, "im.message.add", {
-        DIALOG_ID: chatId,
-        MESSAGE: text,
-        SYSTEM: "N",
-      });
-      console.log(`✅ botReply fallback success (im.message.add):`, { chatId, result: fbResult });
-      return fbResult;
-    } catch (fbErr) {
-      console.error(`❌ botReply BOTH methods failed:`, {
-        chatId,
-        imbotError: error.message,
-        imError: fbErr.message,
-      });
-      throw fbErr;
+    // Fallback: imbot.message.add (требует совпадения app ownership)
+    if (effectiveBotId && env.CLIENT_ID) {
+      try {
+        const fbResult = await b24(env, "imbot.message.add", {
+          BOT_ID: effectiveBotId,
+          CLIENT_ID: env.CLIENT_ID,
+          DIALOG_ID: chatId,
+          MESSAGE: text,
+        });
+        console.log(`✅ botReply fallback success (imbot.message.add):`, { chatId, messageId: fbResult?.message_id || 'unknown' });
+        return fbResult;
+      } catch (fbErr) {
+        console.error(`❌ botReply BOTH methods failed:`, {
+          chatId,
+          imError: error.message,
+          imbotError: fbErr.message,
+        });
+        throw fbErr;
+      }
     }
+    throw error;
   }
 }
 
