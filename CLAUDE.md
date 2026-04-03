@@ -20,7 +20,7 @@
 ```
 bitrix24bot/
 ├── b24-imbot/
-│   ├── worker.js          # Main Cloudflare Worker — all bot logic lives here (~1,240 lines)
+│   ├── worker.js          # Main Cloudflare Worker — all bot logic lives here (~2,200 lines)
 │   └── worker.test.js     # Vitest tests for the worker
 ├── scripts/
 │   ├── build_bearings_seed.py  # Generate SQL seed from BearingsInfo CSV sources
@@ -68,7 +68,9 @@ bitrix24bot/
     ├── deploy.yml         # CI/CD: push to main (non-inbox) → deploy to Cloudflare Workers
     ├── process-inbox.yml  # CI/CD: push to main (inbox/ changes) → process files into D1
     ├── seed-database.yml  # Manual/push: apply schema + seed bearings + KB + register bot
-    └── check-db.yml       # Manual: query D1 table counts and last ingest timestamps
+    ├── check-db.yml       # Manual: query D1 table counts and last ingest timestamps
+    ├── update-secrets.yml # Manual: update Worker secrets (B24_TOKEN, B24_APP_TOKEN, B24_USER_ID)
+    └── main.yml           # Reusable workflow reference for Cloudflare Workers deployment
 ```
 
 The repository root also contains 100+ Markdown reference documents covering GOST/ISO bearing standards, bearing types, manufacturers, and technical specifications, plus operational guides for deployment, configuration, and troubleshooting.
@@ -98,6 +100,7 @@ External Git repos          inbox/ folder (git-tracked)
                           ▼
                      worker.js  (Cloudflare Worker)
                      ├── POST /imbot   ← Bitrix24 webhook
+                     ├── POST /send    ← Remote control (admin)
                      ├── askGemini()   → Gemini 2.5 Flash API
                      │     └── executeTool()  → D1 queries
                      └── botReply()    → Bitrix24 REST API
@@ -109,32 +112,44 @@ External Git repos          inbox/ folder (git-tracked)
 
 ### `b24-imbot/worker.js`
 
-The entire bot logic in one file (~1,240 lines). Major sections:
+The entire bot logic in one file (~2,200 lines). Major sections:
 
 | Section | Description |
 |---|---|
 | `SYSTEM_PROMPT` | Persona, behavioral rules, and proactive tool-use instructions for Gemini |
 | `TOOLS` array | 9 function definitions sent to Gemini: `get_deal`, `search_deals`, `get_company`, `get_deal_products`, `get_my_deals`, `search_catalog`, `search_knowledge`, `search_brand`, `search_analogs` |
 | `b24(env, method, params)` | Bitrix24 REST API HTTP wrapper |
-| `botReply(env, chatId, text)` | Send BB-code message to Bitrix24 chat |
+| `botReply(env, chatId, text, botId)` | Send BB-code message to Bitrix24 chat |
 | `extractHeadingChunks(markdown)` | Parse markdown into heading-aware chunks (1200 chars max) |
 | `stripMarkdown(markdown)` | Remove markdown formatting for plain text indexing |
 | `upsertKnowledgeDocument(env, {...})` | Insert/update KB doc with chunks, tags, links, FTS sync |
 | `askGemini(env, history, userText)` | Iterative Gemini function-calling loop (max 5 iterations) |
 | `executeTool(toolName, args, env)` | Dispatch tool calls to D1 queries or Bitrix24 API |
 | `getHistory / saveHistory` | KV conversation history (last 20 turns, 24-hour TTL) |
+| `registerBot(env)` | Register bot with Bitrix24 via imbot.v2.Bot.register |
+| `registerBotCommands(env, botId)` | Register slash commands (/подшипник, /аналог, /статус) with Bitrix24 |
+| `isPrivateIpAddress / validateImportUrl` | Security helpers for SSRF protection on import endpoints |
+| `fetchWithTimeout(url, options, timeoutMs)` | HTTP request wrapper with 15-second timeout |
+| `sanitizeId(id)` | Input validation for numeric IDs |
 
 **Text formatting**: Bitrix24 uses BB-code: `[B]bold[/B]`, `[I]italic[/I]`, `[U]underline[/U]` — not markdown.
 
-**Group chat filtering**: Bot only responds if message contains keywords like "подшипник", "сделка", "цена", "каталог", "заказ", etc., or the bot is @-mentioned.
+**Group chat filtering**: Bot only responds in group chats if message contains one of the KEYWORDS (подшипник, артикул, сделка, клиент, цена, стоимость, скидка, кп, коммерческ, заказ, поставка, наличие, срок, каталог, аналог, etc.) or the bot is @-mentioned. Private chats always get a response.
 
-**Endpoints (13 total):**
+**Registered slash commands**: `/подшипник` (search), `/аналог` (analogs), `/статус` (status) — registered via `registerBotCommands()` during `/register`.
+
+**Built-in chat commands**: `/помощь` (help), `/сброс` (reset history), `/start` — handled in the normal webhook message flow (`ONIMBOTMESSAGEADD`), not via `imbot.v2.Command.register`.
+
+**Typing indicator**: The bot sends `imbot.sendtyping` before AI processing to show a typing animation in Bitrix24.
+
+**Endpoints (14 total):**
 
 | Route | Method | Auth | Description |
 |---|---|---|---|
-| `/imbot` | POST | B24 signature | Main webhook for incoming Bitrix24 messages |
-| `/register` | GET | IMPORT_SECRET | Register bot with Bitrix24 (run once after deploy) |
-| `/reset` | POST | None | Clear a user's conversation history in KV |
+| `/imbot` | POST | B24_APP_TOKEN (optional) | Main webhook for incoming Bitrix24 messages; token validated only when set |
+| `/register` | GET | IMPORT_SECRET | Register bot with Bitrix24 + register slash commands |
+| `/send` | POST | IMPORT_SECRET | Remote control: send message to any Bitrix24 chat |
+| `/reset` | POST | None | Clear conversation history in KV; requires JSON body with `user_id` and `dialog_id` |
 | `/status` | GET | IMPORT_SECRET | Health check: shows all config bindings and secret presence |
 | `/import-catalog` | GET | IMPORT_SECRET | Import semicolon-delimited CSV from Bitrix24 Disk |
 | `/import-catalog-csv` | GET | IMPORT_SECRET | Import extended CSV with auto-detected columns |
@@ -331,7 +346,17 @@ The easiest way to add data is the inbox/ git workflow:
 GET <worker-url>/register?secret=<IMPORT_SECRET>
 ```
 
-Must be done once after initial deployment.
+Must be done once after initial deployment. Registration uses the imbot.v2 API (`imbot.v2.Bot.register`) and requires `B24_APP_TOKEN` to be set. It also auto-registers slash commands (`/подшипник`, `/аналог`, `/статус`) via `registerBotCommands()`.
+
+### Remote Control (Sending Messages)
+
+```bash
+curl -X POST <worker-url>/send \
+  -H "Content-Type: application/json" \
+  -d '{"secret":"<IMPORT_SECRET>","chat_id":"123","text":"Hello"}'
+```
+
+Sends a message to any Bitrix24 chat. Useful for notifications and admin operations.
 
 ---
 
@@ -345,7 +370,9 @@ Must be done once after initial deployment.
   - `env.B24_PORTAL` — Bitrix24 portal URL
   - `env.B24_USER_ID` — Bitrix24 REST auth user ID
   - `env.B24_TOKEN` — Bitrix24 REST auth token
+  - `env.B24_APP_TOKEN` — Bitrix24 bot application token (for imbot.v2 API)
   - `env.IMPORT_SECRET` — Secret for admin import endpoints
+  - `env.WORKER_HOST` — Worker domain for registration callback URL
   - `env.BOT_ID` — Bitrix24 bot ID
   - `env.CHAT_HISTORY` — KV namespace binding
   - `env.CATALOG` — D1 database binding (note: binding name is `CATALOG`, not `DB`)
@@ -388,7 +415,7 @@ Must be done once after initial deployment.
 - The `.gitignore` excludes `*.sh` (secrets/scripts), `.wrangler/` (local build artifacts), `__pycache__/`, `*.pyc`, `*.pyo`.
 - The `process-inbox.yml` workflow uses `[skip ci]` in auto-commits to prevent deploy loops.
 
-**GitHub Actions workflows (4 total):**
+**GitHub Actions workflows (6 total):**
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
@@ -396,6 +423,8 @@ Must be done once after initial deployment.
 | `process-inbox.yml` | Push to `main` (`inbox/**` paths) or `workflow_dispatch` | Process inbox files → D1; auto-delete + commit `[skip ci]` |
 | `seed-database.yml` | Push to `main` (own file changes) or `workflow_dispatch` | Apply D1 migrations, clone & seed BearingsInfo + knowledge-base, register bot |
 | `check-db.yml` | `workflow_dispatch` only | Query D1 row counts and last ingest audit rows (read-only diagnostic) |
+| `update-secrets.yml` | `workflow_dispatch` only | Update Worker secrets (B24_TOKEN, B24_APP_TOKEN, B24_USER_ID) via Wrangler |
+| `main.yml` | Reusable | Cloudflare Workers deployment action reference |
 
 All workflows use `wrangler@4.77.0` and Node.js 24. `deploy.yml` and `seed-database.yml` accept an optional `cf_token` input to override `secrets.CLOUDFLARE_API_TOKEN`.
 
@@ -413,6 +442,7 @@ All workflows use `wrangler@4.77.0` and Node.js 24. `deploy.yml` and `seed-datab
 | `WORKER_HOST` | Cloudflare Worker secret | Worker domain (for registration callback) |
 | `BOT_ID` | `wrangler.toml` vars | Bitrix24 bot registration ID |
 | `CLIENT_ID` | `wrangler.toml` vars | Bitrix24 app client ID |
+| `B24_APP_TOKEN` | Cloudflare Worker secret | Bitrix24 bot application token (imbot.v2 API) |
 | `CLOUDFLARE_API_TOKEN` | GitHub Actions secret | Wrangler deployment auth |
 | `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions secret | Cloudflare account ID for D1 remote access |
 

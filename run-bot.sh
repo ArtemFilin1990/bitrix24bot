@@ -38,7 +38,9 @@ fi
 # Проверка авторизации в Cloudflare
 check_auth() {
     log_info "Проверка авторизации в Cloudflare..."
-    if ! wrangler whoami &> /dev/null; then
+    local whoami_output
+    whoami_output=$(wrangler whoami 2>&1 || true)
+    if echo "$whoami_output" | grep -qi "not authenticated\|run \`wrangler login\`"; then
         log_warning "Вы не авторизованы в Cloudflare"
         log_info "Для локальной разработки выполните: wrangler login"
         log_info "Для CI/CD установите переменные CLOUDFLARE_API_TOKEN и CLOUDFLARE_ACCOUNT_ID"
@@ -160,7 +162,16 @@ setup_resources() {
     # ── D1 база данных ──
     log_info "Создание D1 базы данных bearings-catalog..."
     local d1_output
-    if d1_output=$(wrangler d1 create bearings-catalog 2>&1); then
+    local d1_cmd=(wrangler d1 create bearings-catalog)
+    if [ -n "${D1_JURISDICTION:-}" ]; then
+        d1_cmd+=(--jurisdiction "${D1_JURISDICTION}")
+        log_info "D1 jurisdiction: ${D1_JURISDICTION}"
+    elif [ -n "${D1_LOCATION:-}" ]; then
+        d1_cmd+=(--location "${D1_LOCATION}")
+        log_info "D1 location hint: ${D1_LOCATION}"
+    fi
+
+    if d1_output=$("${d1_cmd[@]}" 2>&1); then
         local database_id
         database_id=$(echo "$d1_output" | sed -n 's/.*database_id\s*=\s*"\([^"]*\)".*/\1/p' | head -1)
         if [ -n "$database_id" ]; then
@@ -222,6 +233,9 @@ setup_resources() {
     echo "  B24_TOKEN         — токен REST API Bitrix24"
     echo "  IMPORT_SECRET     — любая случайная строка для защиты эндпоинтов"
     echo "  WORKER_HOST       — домен воркера (например, bitrix24bot.xxx.workers.dev)"
+    echo "Опционально перед setup можно задать:"
+    echo "  D1_LOCATION       — location hint (wnam|enam|weur|eeur|apac|oc)"
+    echo "  D1_JURISDICTION   — data jurisdiction (eu|fedramp)"
     echo ""
 
     local secrets=(GEMINI_API_KEY B24_PORTAL B24_USER_ID B24_TOKEN IMPORT_SECRET WORKER_HOST)

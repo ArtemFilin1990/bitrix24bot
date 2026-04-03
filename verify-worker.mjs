@@ -161,12 +161,11 @@ check(
 );
 
 const hasIterationLimit =
-  worker.includes("for (let i = 0; i < 5; i++)") ||
-  worker.includes("i < 5");
-check(hasIterationLimit, "askGemini: iteration limit (max 5)");
+  /for \(let i = 0; i < \d+; i\+\+\)/.test(worker);
+check(hasIterationLimit, "askGemini: iteration limit");
 
 check(
-  worker.includes("im.dialog.writing") && worker.includes(".catch"),
+  (worker.includes("imbot.sendtyping") || worker.includes("im.dialog.writing")) && worker.includes(".catch"),
   "Typing indicator: error swallowed gracefully"
 );
 

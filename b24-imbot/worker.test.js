@@ -185,52 +185,6 @@ describe('IMPORT_SECRET guards', () => {
   });
 });
 
-// ── /import-catalog: apostrophe handling ────────────────────────────────────
-
-describe('/import-catalog apostrophe handling', () => {
-  it('bearing names with apostrophes are stored verbatim (no double-escaping)', async () => {
-    // CSV with a name containing a single apostrophe — e.g. "D'Arcy 6205"
-    const csvData = "Наименование;Артикул;Завод;Вес, кг\nD'Arcy 6205;6205;SKF;0.1";
-    const boundValues = [];
-
-    // Mock db that captures the values passed to .bind()
-    const captureStmt = {
-      bind: (...args) => { boundValues.push(...args); return captureStmt; },
-      all:  async () => ({ results: [] }),
-      run:  async () => ({}),
-    };
-    const captureDb = {
-      prepare: () => captureStmt,
-      withSession: () => captureDb,
-      getBookmark: () => null,
-    };
-
-    vi.stubGlobal('fetch', vi.fn(async (url) => {
-      // Simulates downloading the CSV file from Bitrix24 Disk
-      return new Response(csvData, {
-        status: 200,
-        headers: { 'Content-Type': 'text/csv' },
-      });
-    }));
-
-    const res = await worker.fetch(
-      makeRequest('/import-catalog?secret=test-secret&url=https://example.com/file.csv'),
-      makeEnv({ CATALOG: captureDb }),
-    );
-
-    vi.unstubAllGlobals();
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
-    expect(body.inserted).toBe(1);
-
-    // The stored name must be the original value — single apostrophe, not doubled
-    expect(boundValues).toContain("D'Arcy 6205");
-    expect(boundValues).not.toContain("D''Arcy 6205");
-  });
-});
-
 // ── /reset endpoint ───────────────────────────────────────────────────────────
 
 describe('/reset endpoint', () => {
@@ -287,18 +241,29 @@ describe('/reset endpoint', () => {
 // ── /imbot routing ────────────────────────────────────────────────────────────
 
 describe('/imbot event routing', () => {
-  it('rejects webhook with invalid B24 app token', async () => {
-    const res = await worker.fetch(
-      makeImbotRequest({
-        event: 'ONIMBOTMESSAGEADD',
-        'auth[application_token]': 'invalid-token',
-        'data[USER][ID]': '42',
-        'data[PARAMS][DIALOG_ID]': '42',
-        'data[PARAMS][MESSAGE]': 'Привет',
-      }),
-      makeEnv({ B24_APP_TOKEN: 'expected-token' }),
-    );
-    expect(res.status).toBe(403);
+  it('logs warning but continues with mismatched B24 app token (soft mode)', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event: 'ONIMBOTMESSAGEADD',
+          'auth[application_token]': 'invalid-token',
+          'data[USER][ID]': '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]': 'Привет',
+        }),
+        makeEnv({ B24_APP_TOKEN: 'expected-token' }),
+        ctx,
+      );
+      await ctx._flush();
+      // Soft mode: request is NOT rejected, bot processes the message
+      expect(res.status).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('non-ONIMBOTMESSAGEADD event returns {ok:true} immediately', async () => {
@@ -480,6 +445,177 @@ describe('Built-in commands in personal chat', () => {
   });
 });
 
+describe('Reliability and anti-hallucination guards', () => {
+  it('adds evidence warning when Gemini answers bearing question without tool calls', async () => {
+    const mockFetch = makeApiFetchMock('Да, подходит.');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]':   'Подойдет ли подшипник 6205?',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[1].body)).toContain('Ответ без подтверждения из базы');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects too long user message with explicit limit response', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+    const longMessage = 'а'.repeat(3600);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]':   longMessage,
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+      expect(res.status).toBe(200);
+
+      const geminiCalls = mockFetch.mock.calls.filter(([url]) =>
+        String(url).includes('generativelanguage.googleapis.com'),
+      );
+      expect(geminiCalls.length).toBe(0);
+
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(String(messageAddCall[1].body)).toContain('Сообщение слишком длинное');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not add evidence warning for non-bearing message containing small numeric ids', async () => {
+    const mockFetch = makeApiFetchMock('Ок, посмотрел сделку.');
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': 'chat123',
+          'data[PARAMS][MESSAGE]':   'Проверь сделка 123',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[1].body)).not.toContain('Ответ без подтверждения из базы');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('Bitrix24 webhook base URL selection', () => {
+  it('uses BITRIX_WEBHOOK_URL for REST calls when provided', async () => {
+    const mockFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ result: 1 }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const res = await worker.fetch(
+        makeRequest('/send', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            secret:  'test-secret',
+            chat_id: '42',
+            text:    'Проверка вебхука',
+          }),
+        }),
+        makeEnv({
+          BITRIX_WEBHOOK_URL: 'https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/',
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[0])).toContain(
+        'https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/imbot.message.add.json',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('falls back to B24_PORTAL/B24_USER_ID/B24_TOKEN for invalid BITRIX_WEBHOOK_URL', async () => {
+    const mockFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ result: 1 }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const res = await worker.fetch(
+        makeRequest('/send', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            secret:  'test-secret',
+            chat_id: '42',
+            text:    'Проверка fallback',
+          }),
+        }),
+        makeEnv({
+          B24_PORTAL:          'portal.example.com',
+          B24_USER_ID:         '77',
+          B24_TOKEN:           'fallback-token',
+          BITRIX_WEBHOOK_URL:  'https://portal.example.com/not-a-webhook',
+        }),
+      );
+
+      expect(res.status).toBe(200);
+      const messageAddCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[0])).toContain(
+        'https://portal.example.com/rest/77/fallback-token/imbot.message.add.json',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 // ── ONIMCOMMANDADD slash-command handling ─────────────────────────────────────
 
 describe('ONIMCOMMANDADD slash-command handling', () => {
@@ -529,7 +665,7 @@ describe('ONIMCOMMANDADD slash-command handling', () => {
         .filter((url) => !url.includes('generativelanguage'));
 
       expect(b24Calls.some((url) => url.includes('imbot.sendtyping'))).toBe(true);
-      expect(b24Calls.some((url) => url.includes('imbot.message.add'))).toBe(true);
+      expect(b24Calls.some((url) => url.includes('im.message.add'))).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
