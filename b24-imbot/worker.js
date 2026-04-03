@@ -2077,6 +2077,41 @@ export default {
       });
     }
 
+    // ВРЕМЕННО: обновить URL обработчика бота через REST API
+    if (url.pathname === "/fix-bot-url" && request.method === "GET") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      try {
+        const workerUrl = `https://${env.WORKER_HOST}`;
+        const handlerUrl = `${workerUrl}/imbot`;
+        const result = await b24(env, "imbot.update", {
+          BOT_ID: env.BOT_ID,
+          CLIENT_ID: env.CLIENT_ID,
+          FIELDS: {
+            EVENT_HANDLER: handlerUrl,
+          },
+        });
+        return json({ ok: true, handler_url: handlerUrl, result });
+      } catch (e) {
+        // Попробуем v2 API
+        try {
+          const workerUrl = `https://${env.WORKER_HOST}`;
+          const handlerUrl = `${workerUrl}/imbot`;
+          const result2 = await b24(env, "imbot.v2.Bot.update", {
+            botId: parseInt(env.BOT_ID),
+            botToken: env.B24_APP_TOKEN,
+            fields: {
+              eventHandlerUrl: handlerUrl,
+            },
+          });
+          return json({ ok: true, handler_url: handlerUrl, result: result2, api: "v2" });
+        } catch (e2) {
+          return json({ error: e.message, error_v2: e2.message }, 500);
+        }
+      }
+    }
+
     // Основной обработчик событий от Bitrix24
     if (url.pathname === "/imbot" && request.method === "POST") {
       const body = await request.text();
