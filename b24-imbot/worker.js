@@ -945,7 +945,7 @@ async function executeTool(env, name, args) {
         // Дедупликация двунаправленных пар
         const seen = new Set();
         const deduped = results.filter((r) => {
-          const pair = [r.designation, r.analog_designation].sort().join("|");
+          const pair = [r.designation, r.analog_designation].sort().join("|") + `|${r.brand}|${r.analog_brand}`;
           if (seen.has(pair)) return false;
           seen.add(pair);
           return true;
@@ -956,7 +956,7 @@ async function executeTool(env, name, args) {
           match_type: matchType,
           note: matchType === "partial"
             ? "ЧАСТИЧНОЕ СОВПАДЕНИЕ — НЕ является подтверждённым аналогом. Обязательна проверка: d, D, B, тип нагрузки, грузоподъёмность (Cr, C0r)."
-            : "ТОЧНОЕ СОВПАДЕНИЕ по обозначению в базе аналогов. Другие аналоги вне этого списка НЕ ПОДТВЕРЖДЕНЫ базой.",
+            : "ТОЧНОЕ СОВПАДЕНИЕ по обозначению в базе аналогов. Показаны первые совпадения — могут быть и другие варианты.",
           substitution_warning: matchType === "exact"
             ? "Перед заменой проверьте: класс точности, радиальный зазор (C2/CN/C3/C4), тип смазки, материал сепаратора, допустимую температуру."
             : "ЧАСТИЧНОЕ СОВПАДЕНИЕ. Перед заменой ОБЯЗАТЕЛЬНО сверьте габариты (d, D, B) и тип подшипника.",
