@@ -2173,10 +2173,26 @@ export default {
       // ДИАГНОСТИКА: простой пинг-понг чтобы проверить доходят ли вебхуки
       if (event === "ONIMBOTMESSAGEADD" && chatId && message === "ping") {
         const diagBotId = data["data[BOT_ID]"] || env.BOT_ID;
-        ctx.waitUntil(
-          botReply(env, chatId, `pong! event=${event} user=${userId} chat=${chatId} bot=${diagBotId}`, diagBotId)
-            .catch((e) => console.error("DIAG pong error:", e))
-        );
+        ctx.waitUntil((async () => {
+          try {
+            await botReply(env, chatId, `pong! bot=${diagBotId} env.BOT_ID=${env.BOT_ID} chat=${chatId}`, diagBotId);
+          } catch (e1) {
+            console.error("DIAG pong error with diagBotId:", e1.message);
+            // Попробуем без CLIENT_ID — напрямую через REST
+            try {
+              const url = `https://${env.B24_PORTAL}/rest/${env.B24_USER_ID}/${env.B24_TOKEN}/imbot.message.add.json`;
+              const r = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ BOT_ID: diagBotId, DIALOG_ID: chatId, MESSAGE: `DIAG ERROR: ${e1.message}` }),
+              });
+              const d = await r.json();
+              console.error("DIAG fallback result:", d);
+            } catch (e2) {
+              console.error("DIAG fallback also failed:", e2.message);
+            }
+          }
+        })());
         return json({ ok: true });
       }
       // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
