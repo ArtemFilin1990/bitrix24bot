@@ -20,7 +20,7 @@
 ```
 bitrix24bot/
 ├── b24-imbot/
-│   ├── worker.js          # Main Cloudflare Worker — all bot logic lives here (~2,200 lines)
+│   ├── worker.js          # Main Cloudflare Worker — all bot logic lives here (~2,600 lines)
 │   └── worker.test.js     # Vitest tests for the worker
 ├── scripts/
 │   ├── build_bearings_seed.py  # Generate SQL seed from BearingsInfo CSV sources
@@ -112,19 +112,23 @@ External Git repos          inbox/ folder (git-tracked)
 
 ### `b24-imbot/worker.js`
 
-The entire bot logic in one file (~2,200 lines). Major sections:
+The entire bot logic in one file (~2,600 lines). Major sections:
 
 | Section | Description |
 |---|---|
 | `SYSTEM_PROMPT` | Persona, behavioral rules, and proactive tool-use instructions for Gemini |
-| `TOOLS` array | 9 function definitions sent to Gemini: `get_deal`, `search_deals`, `get_company`, `get_deal_products`, `get_my_deals`, `search_catalog`, `search_knowledge`, `search_brand`, `search_analogs` |
+| `TOOLS` array | 8 function definitions sent to Gemini: `get_deal`, `search_deals`, `get_company`, `get_deal_products`, `get_my_deals`, `search_catalog`, `search_knowledge`, `search_analogs` |
+| `getB24BaseUrl(env)` | Build Bitrix24 API base URL from env vars |
+| `buildB24MethodUrl(baseUrl, method)` | Build full B24 REST method URL |
 | `b24(env, method, params)` | Bitrix24 REST API HTTP wrapper |
-| `botReply(env, chatId, text, botId)` | Send BB-code message to Bitrix24 chat |
+| `botReply(env, chatId, text, botId)` | Send BB-code message to Bitrix24 chat (uses `im.message.add` with `imbot.message.add` fallback) |
 | `extractHeadingChunks(markdown)` | Parse markdown into heading-aware chunks (1200 chars max) |
 | `stripMarkdown(markdown)` | Remove markdown formatting for plain text indexing |
 | `upsertKnowledgeDocument(env, {...})` | Insert/update KB doc with chunks, tags, links, FTS sync |
 | `askGemini(env, history, userText)` | Iterative Gemini function-calling loop (max 5 iterations) |
 | `executeTool(toolName, args, env)` | Dispatch tool calls to D1 queries or Bitrix24 API |
+| `isBearingFactQuestion(text)` | Classify bearing-related questions for evidence policy |
+| `enforceEvidencePolicy(responseText, userText, usedToolNames)` | Validate responses use tools when answering factual bearing queries |
 | `getHistory / saveHistory` | KV conversation history (last 20 turns, 24-hour TTL) |
 | `registerBot(env)` | Register bot with Bitrix24 via imbot.v2.Bot.register |
 | `registerBotCommands(env, botId)` | Register slash commands (/подшипник, /аналог, /статус) with Bitrix24 |
@@ -142,7 +146,7 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 
 **Typing indicator**: The bot sends `imbot.sendtyping` before AI processing to show a typing animation in Bitrix24.
 
-**Endpoints (14 total):**
+**Endpoints (18 total):**
 
 | Route | Method | Auth | Description |
 |---|---|---|---|
@@ -160,6 +164,10 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 | `/import-analogs` | GET | IMPORT_SECRET | Import analog mappings from CSV |
 | `/discover-catalog` | GET | IMPORT_SECRET | List available Bitrix24 catalog iblock IDs |
 | `/preview-file` | GET | IMPORT_SECRET | Preview first N lines of a Disk file |
+| `/debug-webhook` | POST | None | Diagnostic: echo raw incoming webhook payload (temporary) |
+| `/diagnose` | GET | IMPORT_SECRET | Full bot diagnostic check and repair |
+| `/fix-bot` | GET | IMPORT_SECRET | Re-register bot with new code (temporary) |
+| `/fix-bot-url` | GET | IMPORT_SECRET | Update bot handler URL via REST API (temporary) |
 
 ### `schema.sql` / `migrations/`
 
