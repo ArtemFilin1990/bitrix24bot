@@ -241,25 +241,63 @@ describe('/reset endpoint', () => {
 // ── /imbot routing ────────────────────────────────────────────────────────────
 
 describe('/imbot event routing', () => {
-  it('logs warning but continues with mismatched B24 app token (soft mode)', async () => {
+  it('rejects request with mismatched B24 app token (403)', async () => {
+    const res = await worker.fetch(
+      makeImbotRequest({
+        event: 'ONIMBOTMESSAGEADD',
+        'auth[application_token]': 'invalid-token',
+        'data[USER][ID]': '42',
+        'data[PARAMS][DIALOG_ID]': '42',
+        'data[PARAMS][MESSAGE]': 'Привет',
+      }),
+      makeEnv({ B24_APP_TOKEN: 'expected-token' }),
+      makeCtx(),
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toBe('Invalid application token');
+  });
+
+  it('skips token validation when B24_APP_TOKEN is not set', async () => {
     const mockFetch = makeApiFetchMock();
     vi.stubGlobal('fetch', mockFetch);
-
     try {
       const ctx = makeCtx();
       const res = await worker.fetch(
         makeImbotRequest({
           event: 'ONIMBOTMESSAGEADD',
-          'auth[application_token]': 'invalid-token',
+          'auth[application_token]': 'any-token',
           'data[USER][ID]': '42',
           'data[PARAMS][DIALOG_ID]': '42',
-          'data[PARAMS][MESSAGE]': 'Привет',
+          'data[PARAMS][MESSAGE]': '/start',
         }),
-        makeEnv({ B24_APP_TOKEN: 'expected-token' }),
+        makeEnv({ B24_APP_TOKEN: undefined }),
         ctx,
       );
       await ctx._flush();
-      // Soft mode: request is NOT rejected, bot processes the message
+      expect(res.status).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('accepts request with matching B24 app token', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event: 'ONIMBOTMESSAGEADD',
+          'auth[application_token]': 'correct-token',
+          'data[USER][ID]': '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]': '/start',
+        }),
+        makeEnv({ B24_APP_TOKEN: 'correct-token' }),
+        ctx,
+      );
+      await ctx._flush();
       expect(res.status).toBe(200);
     } finally {
       vi.unstubAllGlobals();
@@ -395,6 +433,7 @@ describe('Built-in commands in personal chat', () => {
     vi.stubGlobal('fetch', mockFetch);
 
     try {
+      const ctx = makeCtx();
       const res = await worker.fetch(
         makeImbotRequest({
           event:                     'ONIMBOTMESSAGEADD',
@@ -403,8 +442,9 @@ describe('Built-in commands in personal chat', () => {
           'data[PARAMS][MESSAGE]':   '/start',
         }),
         makeEnv(),
-        makeCtx(),
+        ctx,
       );
+      await ctx._flush();
       expect(res.status).toBe(200);
       expect((await res.json()).ok).toBe(true);
       // The worker must have made at least one outbound API call (to Bitrix24)
