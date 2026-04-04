@@ -645,7 +645,7 @@ describe('ONIMCOMMANDADD slash-command handling', () => {
     }
   });
 
-  it('calls imbot.sendtyping and imbot.message.add for /подшипник command', async () => {
+  it('calls typing indicator and sends message for /подшипник command', async () => {
     const mockFetch = makeApiFetchMock('Подшипник 6205-2RS найден');
     vi.stubGlobal('fetch', mockFetch);
 
@@ -658,8 +658,12 @@ describe('ONIMCOMMANDADD slash-command handling', () => {
         .map(([url]) => String(url))
         .filter((url) => !url.includes('generativelanguage'));
 
-      expect(b24Calls.some((url) => url.includes('imbot.sendtyping'))).toBe(true);
-      expect(b24Calls.some((url) => url.includes('im.message.add'))).toBe(true);
+      // v2 API: imbot.v2.Chat.InputAction.notify for typing, imbot.v2.Chat.Message.send for message
+      // With fallback to v1: imbot.sendtyping / imbot.message.add / im.message.add
+      const hasTyping = b24Calls.some((url) => url.includes('InputAction.notify') || url.includes('imbot.sendtyping'));
+      const hasMessage = b24Calls.some((url) => url.includes('Message.send') || url.includes('imbot.message.add') || url.includes('im.message.add'));
+      expect(hasTyping).toBe(true);
+      expect(hasMessage).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
