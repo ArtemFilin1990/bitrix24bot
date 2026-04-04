@@ -1059,7 +1059,18 @@ async function askGemini(env, history, userText) {
   console.log(`🤖 askGemini: model=${MODEL}, historyLength=${history.length}`);
 
   const contents = [...history, { role: "user", parts: [{ text: userText }] }];
+  const currentTurnStart = contents.length; // индекс начала записей текущего хода
+  const usedToolNames = new Set();
 
+  for (let i = 0; i < 8; i++) {
+    console.log(`🔄 Gemini iteration ${i + 1}/8`);
+    const geminiBody = JSON.stringify({
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      tools: GEMINI_TOOLS,
+      generationConfig: { maxOutputTokens: 4096, temperature: 0.1 },
+    });
+    let r = await fetchWithTimeout(URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: geminiBody,
@@ -1110,7 +1121,44 @@ async function askGemini(env, history, userText) {
         .filter((p) => p.text)
         .map((p) => p.text)
         .join("") || "—";
+      // Проверка причины завершения
+      const finishReason = candidate.finishReason;
+      if (finishReason === "MAX_TOKENS") {
+        console.warn("⚠️ Gemini: response truncated (MAX_TOKENS)");
+        responseText += "\n\n[I]...ответ сокращён. Задайте уточняющий вопрос для продолжения.[/I]";
+      }
+      // Пост-обработка: детект потенциальных галлюцинаций
+      // Ищем ТОЛЬКО в текущем ходе (не в истории) результаты инструментов с found:0
+      const toolResults = contents
+        .slice(currentTurnStart)
+        .filter((c) => c.role === "function")
+        .flatMap((c) => c.parts || []);
+      for (const tr of toolResults) {
+        try {
+          const res = tr.functionResponse;
+          if (!res) continue;
+          const parsed = typeof res.response?.result === "string"
+            ? JSON.parse(res.response.result) : null;
+          if (!parsed || parsed.found !== 0) continue;
 
+          if (res.name === "search_catalog" && /\d+\s*(руб|₽|шт)/i.test(responseText)) {
+            responseText += "\n\n[I]⚠️ Внимание: данные о цене/наличии не подтверждены каталогом Эверест. Уточните у менеджера.[/I]";
+            break;
+          }
+          if (res.name === "search_analogs" && /аналог/i.test(responseText) && /\d{3,}/i.test(responseText)) {
+            responseText += "\n\n[I]⚠️ Указанные аналоги не подтверждены базой Эверест. Требуется проверка по габаритам (d, D, B).[/I]";
+            break;
+          }
+        } catch { /* skip parse errors */ }
+      }
+
+      // Применить enforceEvidencePolicy
+      responseText = enforceEvidencePolicy(responseText, userText, usedToolNames);
+
+      console.log(`✅ Gemini: final response (${responseText.length} chars, finishReason=${finishReason})`);
+      return {
+        text: responseText,
+        history: contents.slice(-20),
       };
     }
 
@@ -2245,6 +2293,11 @@ export default {
       }
 
       const event = data["event"];
+      const userId = data["data[USER][ID]"];
+      const chatId =
+        data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
+      const rawMessage = data["data[PARAMS][MESSAGE]"];
+      const message = rawMessage?.trim();
 
       // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
       // которому адресовано сообщение (ID в чате может отличаться от env.BOT_ID)
