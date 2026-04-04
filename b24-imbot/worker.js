@@ -358,42 +358,49 @@ async function botReply(env, chatId, text, botId = null) {
     throw new Error("botReply: text must be a non-empty string");
   }
 
-  // Основной метод: im.message.add (работает через webhook REST-токен)
-  try {
-    const result = await b24(env, "im.message.add", {
-      DIALOG_ID: chatId,
-      MESSAGE: text,
-      SYSTEM: "N",
-    });
-    console.log(`✅ botReply success (im.message.add):`, { chatId, result });
-    return result;
-  } catch (error) {
-    console.warn(`⚠️ im.message.add failed, trying imbot.message.add fallback:`, {
-      chatId,
-      error: error.message,
-    });
-    // Fallback: imbot.message.add (требует совпадения app ownership)
-    if (effectiveBotId && env.CLIENT_ID) {
+  // Основной метод: imbot.message.add (отправляет от имени бота)
+  if (effectiveBotId && env.CLIENT_ID) {
+    try {
+      const result = await b24(env, "imbot.message.add", {
+        BOT_ID: effectiveBotId,
+        CLIENT_ID: env.CLIENT_ID,
+        DIALOG_ID: chatId,
+        MESSAGE: text,
+      });
+      console.log(`✅ botReply success (imbot.message.add):`, { chatId, result });
+      return result;
+    } catch (error) {
+      console.warn(`⚠️ imbot.message.add failed, trying im.message.add fallback:`, {
+        chatId,
+        error: error.message,
+      });
+      // Fallback: im.message.add (через REST-токен пользователя)
       try {
-        const fbResult = await b24(env, "imbot.message.add", {
-          BOT_ID: effectiveBotId,
-          CLIENT_ID: env.CLIENT_ID,
+        const fbResult = await b24(env, "im.message.add", {
           DIALOG_ID: chatId,
           MESSAGE: text,
+          SYSTEM: "N",
         });
-        console.log(`✅ botReply fallback success (imbot.message.add):`, { chatId, messageId: fbResult?.message_id || 'unknown' });
+        console.log(`✅ botReply fallback success (im.message.add):`, { chatId, result: fbResult });
         return fbResult;
       } catch (fbErr) {
         console.error(`❌ botReply BOTH methods failed:`, {
           chatId,
-          imError: error.message,
-          imbotError: fbErr.message,
+          imbotError: error.message,
+          imError: fbErr.message,
         });
         throw fbErr;
       }
     }
-    throw error;
   }
+  // Если BOT_ID или CLIENT_ID не заданы — используем im.message.add напрямую
+  const result = await b24(env, "im.message.add", {
+    DIALOG_ID: chatId,
+    MESSAGE: text,
+    SYSTEM: "N",
+  });
+  console.log(`✅ botReply success (im.message.add, no BOT_ID):`, { chatId, result });
+  return result;
 }
 
 function extractHeadingChunks(markdown) {

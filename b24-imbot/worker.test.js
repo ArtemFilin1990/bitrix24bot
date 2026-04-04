@@ -666,7 +666,7 @@ describe('ONIMCOMMANDADD slash-command handling', () => {
         .filter((url) => !url.includes('generativelanguage'));
 
       expect(b24Calls.some((url) => url.includes('imbot.sendtyping'))).toBe(true);
-      expect(b24Calls.some((url) => url.includes('im.message.add'))).toBe(true);
+      expect(b24Calls.some((url) => url.includes('imbot.message.add') || url.includes('im.message.add'))).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
