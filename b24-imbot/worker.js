@@ -358,42 +358,54 @@ async function botReply(env, chatId, text, botId = null) {
     throw new Error("botReply: text must be a non-empty string");
   }
 
-  // Основной метод: imbot.message.add (отправляет от имени бота)
-  if (effectiveBotId && env.CLIENT_ID) {
+  // Основной метод: imbot.v2.Chat.Message.send (v2 API — совместим с v2-регистрацией бота)
+  if (effectiveBotId && env.B24_APP_TOKEN) {
     try {
-      const result = await b24(env, "imbot.message.add", {
-        BOT_ID: effectiveBotId,
-        CLIENT_ID: env.CLIENT_ID,
-        DIALOG_ID: chatId,
-        MESSAGE: text,
+      const result = await b24(env, "imbot.v2.Chat.Message.send", {
+        botId: parseInt(effectiveBotId),
+        botToken: env.B24_APP_TOKEN,
+        dialogId: String(chatId),
+        fields: { message: text },
       });
-      console.log(`✅ botReply success (imbot.message.add):`, { chatId, result });
-      return result;
+      console.log(`✅ botReply success (imbot.v2.Chat.Message.send):`, { chatId, result });
+      return result?.id ?? result;
     } catch (error) {
-      console.warn(`⚠️ imbot.message.add failed, trying im.message.add fallback:`, {
-        chatId,
-        error: error.message,
-      });
-      // Fallback: im.message.add (через REST-токен пользователя)
+      console.warn(`⚠️ imbot.v2.Chat.Message.send failed:`, { chatId, error: error.message });
+      // Fallback 1: imbot.message.add (v1 API с CLIENT_ID)
+      if (env.CLIENT_ID) {
+        try {
+          const fb1 = await b24(env, "imbot.message.add", {
+            BOT_ID: effectiveBotId,
+            CLIENT_ID: env.CLIENT_ID,
+            DIALOG_ID: chatId,
+            MESSAGE: text,
+          });
+          console.log(`✅ botReply fallback (imbot.message.add):`, { chatId, result: fb1 });
+          return fb1;
+        } catch (fb1Err) {
+          console.warn(`⚠️ imbot.message.add also failed:`, { chatId, error: fb1Err.message });
+        }
+      }
+      // Fallback 2: im.message.add (от имени webhook-пользователя)
       try {
-        const fbResult = await b24(env, "im.message.add", {
+        const fb2 = await b24(env, "im.message.add", {
           DIALOG_ID: chatId,
           MESSAGE: text,
           SYSTEM: "N",
         });
-        console.log(`✅ botReply fallback success (im.message.add):`, { chatId, result: fbResult });
-        return fbResult;
-      } catch (fbErr) {
-        console.error(`❌ botReply BOTH methods failed:`, {
+        console.log(`✅ botReply fallback (im.message.add):`, { chatId, result: fb2 });
+        return fb2;
+      } catch (fb2Err) {
+        console.error(`❌ botReply ALL methods failed:`, {
           chatId,
-          imbotError: error.message,
-          imError: fbErr.message,
+          v2Error: error.message,
+          v1Error: fb2Err.message,
         });
-        throw fbErr;
+        throw fb2Err;
       }
     }
   }
-  // Если BOT_ID или CLIENT_ID не заданы — используем im.message.add напрямую
+  // Если BOT_ID или B24_APP_TOKEN не заданы — используем im.message.add напрямую
   const result = await b24(env, "im.message.add", {
     DIALOG_ID: chatId,
     MESSAGE: text,
@@ -2362,11 +2374,11 @@ export default {
         if (commandName && safeCmdChatId && safeCmdUserId) {
           ctx.waitUntil((async () => {
             try {
-              await b24(env, "imbot.sendtyping", {
-                BOT_ID: webhookBotId,
-                CLIENT_ID: env.CLIENT_ID,
-                DIALOG_ID: safeCmdChatId,
-              }).catch((e) => console.error("imbot.sendtyping error:", e));
+              await b24(env, "imbot.v2.Chat.InputAction.notify", {
+                botId: parseInt(webhookBotId),
+                botToken: env.B24_APP_TOKEN,
+                dialogId: String(safeCmdChatId),
+              }).catch((e) => console.error("imbot.v2 typing error:", e));
               // Команда /статус — прямой ответ без Gemini
               if (commandName === "статус") {
                 const check = (v) => (v ? "✅" : "❌");
@@ -2546,12 +2558,12 @@ export default {
           let responseAttempted = false;
           try {
             console.log("⌨️ Showing typing indicator...", { chatId });
-            // Показать "печатает..." (imbot.sendtyping — официальный метод для ботов)
-            await b24(env, "imbot.sendtyping", {
-              BOT_ID: webhookBotId,
-              CLIENT_ID: env.CLIENT_ID,
-              DIALOG_ID: chatId,
-            }).catch((e) => console.error("imbot.sendtyping error:", e));
+            // Показать "печатает..." через v2 API (совместим с v2-регистрацией бота)
+            await b24(env, "imbot.v2.Chat.InputAction.notify", {
+              botId: parseInt(webhookBotId),
+              botToken: env.B24_APP_TOKEN,
+              dialogId: String(chatId),
+            }).catch((e) => console.error("imbot.v2 typing error:", e));
 
             console.log("📚 Loading conversation history...", { userId, chatId });
             const history = await getHistory(env, userId, chatId);

@@ -165,7 +165,7 @@ const hasIterationLimit =
 check(hasIterationLimit, "askGemini: iteration limit");
 
 check(
-  (worker.includes("imbot.sendtyping") || worker.includes("im.dialog.writing")) && worker.includes(".catch"),
+  (worker.includes("imbot.sendtyping") || worker.includes("im.dialog.writing") || worker.includes("InputAction.notify")) && worker.includes(".catch"),
   "Typing indicator: error swallowed gracefully"
 );
 
