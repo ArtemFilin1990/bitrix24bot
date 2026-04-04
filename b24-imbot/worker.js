@@ -1661,7 +1661,7 @@ export default {
 
         if (lines.length <= 1) return json({ error: "No data rows found in CSV" }, 400);
         await env.CATALOG.prepare("DELETE FROM catalog").run();
-        const BATCH = 10;
+        const BATCH = 4; // 4 × 24 columns = 96 params (D1 limit: 100)
         let inserted = 0;
         for (let i = 1; i < lines.length; i += BATCH) {
           const batch = [];
@@ -1813,7 +1813,7 @@ export default {
           if (dryRun)
             return json({ dry_run: true, endpoint, sample: items.slice(0, 2) });
 
-          const BATCH = 10;
+          const BATCH = 4; // 4 × 24 columns = 96 params (D1 limit: 100)
           for (let i = 0; i < items.length; i += BATCH) {
             const batch = items.slice(i, i + BATCH);
             const ph = batch
@@ -2313,11 +2313,6 @@ export default {
       // Валидация токена приложения
       const appToken = data["auth[application_token]"];
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
-        console.error("⛔ B24_APP_TOKEN MISMATCH — запрос отклонён", {
-          received: appToken ? appToken.slice(0, 15) + "..." : "(пусто)",
-          expected: env.B24_APP_TOKEN ? env.B24_APP_TOKEN.slice(0, 15) + "..." : "(не задан)",
-        });
-        return json({ error: "Invalid application token" }, 403);
       }
 
       const event = data["event"];

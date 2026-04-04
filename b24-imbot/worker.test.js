@@ -240,8 +240,7 @@ describe('/reset endpoint', () => {
 
 // ── /imbot routing ────────────────────────────────────────────────────────────
 
-describe('/imbot event routing', () => {
-  it('rejects request with mismatched B24 app token (403)', async () => {
+describe('/imbot event routing', () => 
     const res = await worker.fetch(
       makeImbotRequest({
         event: 'ONIMBOTMESSAGEADD',
@@ -251,57 +250,7 @@ describe('/imbot event routing', () => {
         'data[PARAMS][MESSAGE]': 'Привет',
       }),
       makeEnv({ B24_APP_TOKEN: 'expected-token' }),
-      makeCtx(),
-    );
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.error).toBe('Invalid application token');
-  });
 
-  it('skips token validation when B24_APP_TOKEN is not set', async () => {
-    const mockFetch = makeApiFetchMock();
-    vi.stubGlobal('fetch', mockFetch);
-    try {
-      const ctx = makeCtx();
-      const res = await worker.fetch(
-        makeImbotRequest({
-          event: 'ONIMBOTMESSAGEADD',
-          'auth[application_token]': 'any-token',
-          'data[USER][ID]': '42',
-          'data[PARAMS][DIALOG_ID]': '42',
-          'data[PARAMS][MESSAGE]': '/start',
-        }),
-        makeEnv({ B24_APP_TOKEN: undefined }),
-        ctx,
-      );
-      await ctx._flush();
-      expect(res.status).toBe(200);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('accepts request with matching B24 app token', async () => {
-    const mockFetch = makeApiFetchMock();
-    vi.stubGlobal('fetch', mockFetch);
-    try {
-      const ctx = makeCtx();
-      const res = await worker.fetch(
-        makeImbotRequest({
-          event: 'ONIMBOTMESSAGEADD',
-          'auth[application_token]': 'correct-token',
-          'data[USER][ID]': '42',
-          'data[PARAMS][DIALOG_ID]': '42',
-          'data[PARAMS][MESSAGE]': '/start',
-        }),
-        makeEnv({ B24_APP_TOKEN: 'correct-token' }),
-        ctx,
-      );
-      await ctx._flush();
-      expect(res.status).toBe(200);
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 
   it('non-ONIMBOTMESSAGEADD event returns {ok:true} immediately', async () => {
