@@ -746,3 +746,249 @@ describe('sanitizeUserId behaviour', () => {
     });
   }
 });
+
+// ── ONIMBOTJOINCHAT welcome message ──────────────────────────────────────────
+
+describe('ONIMBOTJOINCHAT welcome message', () => {
+  it('sends greeting with commands when bot joins chat', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      const res = await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTJOINCHAT',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[USER][ID]':          '42',
+          'data[BOT_ID]':            '999',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+
+      const messageCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
+      );
+      expect(messageCall).toBeTruthy();
+      expect(String(messageCall[1].body)).toContain('ИИ-помощник Эверест');
+      expect(String(messageCall[1].body)).toContain('/подшипник');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not call Gemini for ONIMBOTJOINCHAT event', async () => {
+    const mockFetch = makeApiFetchMock();
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTJOINCHAT',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[USER][ID]':          '42',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const geminiCalls = mockFetch.mock.calls.filter(([url]) =>
+        String(url).includes('generativelanguage.googleapis.com'),
+      );
+      expect(geminiCalls.length).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// ── MAX_TOKENS handling ──────────────────────────────────────────────────────
+
+describe('MAX_TOKENS truncation handling', () => {
+  it('appends continuation prompt when Gemini response is truncated', async () => {
+    const mockFetch = vi.fn(async (url) => {
+      if (String(url).includes('generativelanguage.googleapis.com')) {
+        return new Response(
+          JSON.stringify({
+            candidates: [{
+              content: { parts: [{ text: 'Частичный ответ о подшипниках' }] },
+              finishReason: 'MAX_TOKENS',
+            }],
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ result: 1 }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]':   'Расскажи про подшипники',
+        }),
+        makeEnv(),
+        ctx,
+      );
+      await ctx._flush();
+
+      const messageCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
+      );
+      expect(messageCall).toBeTruthy();
+      expect(String(messageCall[1].body)).toContain('ответ сокращён');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// ── Hallucination detection ──────────────────────────────────────────────────
+
+describe('Hallucination detection post-processing', () => {
+  it('adds price warning when search_catalog returns found:0 but response mentions price', async () => {
+    let callCount = 0;
+    const mockFetch = vi.fn(async (url) => {
+      if (String(url).includes('generativelanguage.googleapis.com')) {
+        callCount++;
+        if (callCount === 1) {
+          // First call: Gemini requests search_catalog tool
+          return new Response(
+            JSON.stringify({
+              candidates: [{
+                content: {
+                  parts: [{
+                    functionCall: {
+                      name: 'search_catalog',
+                      args: { query: '6205' },
+                    },
+                  }],
+                },
+              }],
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        // Second call: Gemini returns text with price (hallucination)
+        return new Response(
+          JSON.stringify({
+            candidates: [{
+              content: { parts: [{ text: 'Подшипник 6205 стоит 500 руб' }] },
+            }],
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ result: 1 }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    // Mock DB returns found: 0 for search_catalog
+    const mockDb = makeMockDb([]);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]':   'Сколько стоит подшипник 6205?',
+        }),
+        makeEnv({ CATALOG: mockDb }),
+        ctx,
+      );
+      await ctx._flush();
+
+      const messageCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
+      );
+      expect(messageCall).toBeTruthy();
+      expect(String(messageCall[1].body)).toContain('не подтверждены каталогом');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('adds analog warning when search_analogs returns found:0 but response mentions analogs', async () => {
+    let callCount = 0;
+    const mockFetch = vi.fn(async (url) => {
+      if (String(url).includes('generativelanguage.googleapis.com')) {
+        callCount++;
+        if (callCount === 1) {
+          return new Response(
+            JSON.stringify({
+              candidates: [{
+                content: {
+                  parts: [{
+                    functionCall: {
+                      name: 'search_analogs',
+                      args: { query: '6205' },
+                    },
+                  }],
+                },
+              }],
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            candidates: [{
+              content: { parts: [{ text: 'Аналог подшипника 6205 — это 180205' }] },
+            }],
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ result: 1 }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const mockDb = makeMockDb([]);
+
+    try {
+      const ctx = makeCtx();
+      await worker.fetch(
+        makeImbotRequest({
+          event:                     'ONIMBOTMESSAGEADD',
+          'data[USER][ID]':          '42',
+          'data[PARAMS][DIALOG_ID]': '42',
+          'data[PARAMS][MESSAGE]':   'Найди аналог 6205',
+        }),
+        makeEnv({ CATALOG: mockDb }),
+        ctx,
+      );
+      await ctx._flush();
+
+      const messageCall = mockFetch.mock.calls.find(([url]) =>
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
+      );
+      expect(messageCall).toBeTruthy();
+      expect(String(messageCall[1].body)).toContain('не подтверждены базой');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

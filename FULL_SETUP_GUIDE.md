@@ -189,7 +189,7 @@ https://ваш-портал.bitrix24.ru/rest/{USER_ID}/{TOKEN}/
 
 ```bash
 npx wrangler secret put GEMINI_API_KEY
-npx wrangler secret put B24_PORTAL        # https://ваш-портал.bitrix24.ru
+npx wrangler secret put B24_PORTAL        # ваш-портал.bitrix24.ru (без https://)
 npx wrangler secret put B24_USER_ID       # числовой ID из URL вебхука
 npx wrangler secret put B24_TOKEN         # токен из URL вебхука
 npx wrangler secret put B24_APP_TOKEN     # токен приложения (для imbot.v2 API)
@@ -203,7 +203,7 @@ npx wrangler secret put WORKER_HOST       # домен воркера (для р
 
 ```env
 GEMINI_API_KEY=AIzaSy...
-B24_PORTAL=https://ваш-портал.bitrix24.ru
+B24_PORTAL=ваш-портал.bitrix24.ru
 B24_USER_ID=1
 B24_TOKEN=seycsj9qf5hbgrua
 IMPORT_SECRET=ваш_секрет
@@ -268,8 +268,8 @@ curl "https://bitrix24bot.ваш-субдомен.workers.dev/status?secret=ВА
   "status": "ok",
   "bot_id": "1279",
   "worker": "bitrix24bot",
-  "database": "connected",
-  "kv": "connected",
+  "database": "bound",
+  "kv": "bound",
   "gemini": "configured",
   "bitrix24": "configured"
 }
