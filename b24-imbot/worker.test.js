@@ -465,7 +465,7 @@ describe('Reliability and anti-hallucination guards', () => {
       await ctx._flush();
 
       const messageAddCall = mockFetch.mock.calls.find(([url]) =>
-
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
       );
       expect(messageAddCall).toBeTruthy();
       expect(String(messageAddCall[1].body)).toContain('Ответ без подтверждения из базы');
@@ -500,7 +500,7 @@ describe('Reliability and anti-hallucination guards', () => {
       expect(geminiCalls.length).toBe(0);
 
       const messageAddCall = mockFetch.mock.calls.find(([url]) =>
-
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
       );
       expect(messageAddCall).toBeTruthy();
       expect(String(messageAddCall[1].body)).toContain('Сообщение слишком длинное');
@@ -528,7 +528,7 @@ describe('Reliability and anti-hallucination guards', () => {
       await ctx._flush();
 
       const messageAddCall = mockFetch.mock.calls.find(([url]) =>
-
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
       );
       expect(messageAddCall).toBeTruthy();
       expect(String(messageAddCall[1].body)).not.toContain('Ответ без подтверждения из базы');
@@ -565,7 +565,11 @@ describe('Bitrix24 webhook base URL selection', () => {
 
       expect(res.status).toBe(200);
       const messageAddCall = mockFetch.mock.calls.find(([url]) =>
-
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[0])).toContain(
+        'https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/',
       );
     } finally {
       vi.unstubAllGlobals();
@@ -601,7 +605,11 @@ describe('Bitrix24 webhook base URL selection', () => {
 
       expect(res.status).toBe(200);
       const messageAddCall = mockFetch.mock.calls.find(([url]) =>
-
+        String(url).includes('im.message.add') || String(url).includes('imbot.message.add'),
+      );
+      expect(messageAddCall).toBeTruthy();
+      expect(String(messageAddCall[0])).toContain(
+        'https://portal.example.com/rest/77/fallback-token/',
       );
     } finally {
       vi.unstubAllGlobals();
