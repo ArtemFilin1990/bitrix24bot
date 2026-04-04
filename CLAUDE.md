@@ -123,7 +123,7 @@ The entire bot logic in one file (~2,200 lines). Major sections:
 | `extractHeadingChunks(markdown)` | Parse markdown into heading-aware chunks (1200 chars max) |
 | `stripMarkdown(markdown)` | Remove markdown formatting for plain text indexing |
 | `upsertKnowledgeDocument(env, {...})` | Insert/update KB doc with chunks, tags, links, FTS sync |
-| `askGemini(env, history, userText)` | Iterative Gemini function-calling loop (max 5 iterations) |
+| `askGemini(env, history, userText)` | Iterative Gemini function-calling loop (max 8 iterations) |
 | `executeTool(toolName, args, env)` | Dispatch tool calls to D1 queries or Bitrix24 API |
 | `getHistory / saveHistory` | KV conversation history (last 20 turns, 24-hour TTL) |
 | `registerBot(env)` | Register bot with Bitrix24 via imbot.v2.Bot.register |
@@ -379,7 +379,7 @@ Sends a message to any Bitrix24 chat. Useful for notifications and admin operati
 - **Error handling**: wrap tool calls in try/catch, return error strings that Gemini can relay to the user.
 - **Bitrix24 text format**: always use BB-code, never markdown, in bot replies.
 - **History trimming**: keep last 20 turns (40 messages) to stay within Gemini context limits.
-- **Function calling loop**: max 5 Gemini iterations per user message to prevent infinite loops.
+- **Function calling loop**: max 8 Gemini iterations per user message to prevent infinite loops.
 - **D1 queries**: use prepared statements — `env.CATALOG.prepare(...).bind(...).all()`.
 
 ### Python (scripts/)
