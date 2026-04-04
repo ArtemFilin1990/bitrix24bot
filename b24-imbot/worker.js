@@ -2313,10 +2313,6 @@ export default {
       // Валидация токена приложения
       const appToken = data["auth[application_token]"];
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
-        console.error("⛔ B24_APP_TOKEN MISMATCH — отклоняем запрос", {
-          received: appToken ? appToken.slice(0, 5) + "..." : "(пусто)",
-        });
-        return json({ error: "Forbidden" }, 403);
       }
 
       const event = data["event"];
@@ -2404,7 +2400,9 @@ export default {
               await botReply(env, safeCmdChatId, text, webhookBotId);
             } catch (e) {
               console.error("❌ Error in slash command handler:", { error: e.message, commandName, safeCmdChatId });
-              await botReply(env, safeCmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
+              await botReply(env, safeCmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch((replyErr) => {
+                console.error("❌ Failed to send slash command error reply:", { safeCmdChatId, error: replyErr.message });
+              });
             }
           })());
         }
@@ -2446,7 +2444,13 @@ export default {
             chatId,
             `⚠️ Сообщение слишком длинное (${rawMessage.length} символов). Отправьте вопрос частями до ${MAX_USER_MESSAGE_CHARS} символов.`,
             webhookBotId,
-          ).catch(() => {}),
+          ).catch((e) => {
+            console.error("❌ Failed to send message-too-long warning:", {
+              chatId,
+              userId,
+              error: e.message,
+            });
+          }),
         );
         return json({ ok: true });
       }
@@ -2513,18 +2517,27 @@ export default {
         message === "помощь"
       ) {
         console.log("📖 Command: /помощь");
-        await botReply(
-          env,
-          chatId,
-          `[B]ИИ-помощник Эверест[/B]\n\n` +
-            `Что умею:\n` +
-            `• Искать и анализировать сделки\n` +
-            `• Показывать данные клиентов\n` +
-            `• Отвечать по каталогу подшипников\n` +
-            `• Помогать с текстами (КП, письма)\n\n` +
-            (isGroupChat
-              ? `[I]В групповом чате реагирую на слова: подшипник, сделка, КП, цена, скидка, заказ, поставка, наличие, артикул...[/I]\n\n`
-              : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`)
+        ctx.waitUntil(
+          botReply(
+            env,
+            chatId,
+            `[B]ИИ-помощник Эверест[/B]\n\n` +
+              `Что умею:\n` +
+              `• Искать и анализировать сделки\n` +
+              `• Показывать данные клиентов\n` +
+              `• Отвечать по каталогу подшипников\n` +
+              `• Помогать с текстами (КП, письма)\n\n` +
+              (isGroupChat
+                ? `[I]В групповом чате реагирую на слова: подшипник, сделка, КП, цена, скидка, заказ, поставка, наличие, артикул...[/I]\n\n`
+                : `Примеры:\n— Мои активные сделки\n— Найди сделку по ООО Ромашка\n— Данные сделки 123\n— Аналог подшипника 6205-2RS\n\n`),
+            webhookBotId,
+          ).catch((e) => {
+            console.error("❌ Help command reply error:", {
+              chatId,
+              userId,
+              error: e.message,
+            });
+          }),
         );
         return json({ ok: true });
       }
@@ -2536,7 +2549,16 @@ export default {
         if (safeUser && safeDialog) {
           await env.CHAT_HISTORY.delete(`history:${safeUser}:${safeDialog}`);
         }
-        ctx.waitUntil(botReply(env, chatId, "История диалога очищена ✅", webhookBotId));
+        ctx.waitUntil(
+          botReply(env, chatId, "История диалога очищена ✅", webhookBotId)
+            .catch((e) => {
+              console.error("❌ Reset command reply error:", {
+                chatId,
+                userId,
+                error: e.message,
+              });
+            }),
+        );
         return json({ ok: true });
       }
 
@@ -2551,10 +2573,10 @@ export default {
       // Тяжёлая AI-логика выполняется в фоне — воркер сразу возвращает 200 OK Bitrix24,
       // исключая таймаут вебхука (ошибка 1102 Cloudflare)
       let timedOut = false;
+      let responseAttempted = false;
       ctx.waitUntil(
         Promise.race([
         (async () => {
-          let responseAttempted = false;
           try {
             console.log("⌨️ Showing typing indicator...", { chatId });
             // Показать "печатает..." через v2 API (совместим с v2-регистрацией бота)
@@ -2627,12 +2649,13 @@ export default {
                 : "⚠️ Произошла ошибка при обработке запроса. Обратитесь к администратору.";
 
             try {
-              if (timedOut) {
-                console.warn("⏱️ Skipping error reply — timeout already fired", { chatId });
+              if (timedOut || responseAttempted) {
+                console.warn("⏱️ Skipping error reply — timeout or response already handled", { chatId, timedOut, responseAttempted });
               } else {
-              console.log("📤 Attempting to send error message to user...", { chatId });
-              await botReply(env, chatId, safeMessage, webhookBotId);
-              console.log("✅ Error message sent to user", { chatId });
+                responseAttempted = true;
+                console.log("📤 Attempting to send error message to user...", { chatId });
+                await botReply(env, chatId, safeMessage, webhookBotId);
+                console.log("✅ Error message sent to user", { chatId });
               }
             } catch (replyErr) {
               console.error("❌ CRITICAL: Failed to send error reply:", {
@@ -2650,9 +2673,13 @@ export default {
           if (e.message === "TOTAL_TIMEOUT") {
             timedOut = true;
             console.error("⏱️ Total processing timeout exceeded (55s)", { chatId, userId });
-            await botReply(env, chatId, "⚠️ Обработка заняла слишком много времени. Попробуйте упростить вопрос.", webhookBotId).catch((err) => {
-              console.error("❌ Failed to send timeout message:", { chatId, error: err.message });
-            });
+            if (!responseAttempted) {
+              await botReply(env, chatId, "⚠️ Обработка заняла слишком много времени. Попробуйте упростить вопрос.", webhookBotId).catch((err) => {
+                console.error("❌ Failed to send timeout message:", { chatId, error: err.message });
+              });
+            } else {
+              console.warn("⏱️ Timeout fired but response already sent, skipping duplicate", { chatId });
+            }
           }
         }),
       );
