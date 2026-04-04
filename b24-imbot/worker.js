@@ -1068,7 +1068,7 @@ async function askGemini(env, history, userText) {
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents,
       tools: GEMINI_TOOLS,
-      generationConfig: { maxOutputTokens: 4096, temperature: 0.1 },
+
     });
     let r = await fetchWithTimeout(URL, {
       method: "POST",
@@ -1152,7 +1152,6 @@ async function askGemini(env, history, userText) {
         } catch { /* skip parse errors */ }
       }
 
-      // Применить enforceEvidencePolicy
       responseText = enforceEvidencePolicy(responseText, userText, usedToolNames);
 
       console.log(`✅ Gemini: final response (${responseText.length} chars, finishReason=${finishReason})`);
@@ -2086,9 +2085,19 @@ export default {
         return json({ error: "Forbidden" }, 403);
       }
       const check = (v) => (v ? "✅" : "❌ missing");
+      const hasGemini = !!env.GEMINI_API_KEY;
+      const hasBitrix = !!(env.B24_PORTAL && env.B24_TOKEN);
+      const hasDb = !!env.CATALOG;
+      const hasKv = !!env.CHAT_HISTORY;
       return json({
-        ok: true,
-        version: "2026-04-03-v2",
+        status: (hasGemini && hasBitrix && hasDb && hasKv) ? "ok" : "degraded",
+        bot_id: env.BOT_ID || null,
+        worker: "bitrix24bot",
+        database: hasDb ? "bound" : "missing",
+        kv: hasKv ? "bound" : "missing",
+        gemini: hasGemini ? "configured" : "missing",
+        bitrix24: hasBitrix ? "configured" : "missing",
+        version: "2026-04-04-v3",
         config: {
           BOT_ID: check(env.BOT_ID),
           CLIENT_ID: check(env.CLIENT_ID),
@@ -2380,6 +2389,29 @@ export default {
               await botReply(env, safeCmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
             }
           })());
+        }
+        return json({ ok: true });
+      }
+
+      // Приветственное сообщение при первом открытии чата с ботом
+      if (event === "ONIMBOTJOINCHAT") {
+        console.log("👋 ONIMBOTJOINCHAT:", { userId, chatId });
+        if (chatId) {
+          ctx.waitUntil(
+            botReply(
+              env,
+              chatId,
+              "Здравствуйте! Я [B]ИИ-помощник Эверест[/B] — консультант по подшипникам.\n\n" +
+              "Помогу подобрать подшипники, найти аналоги, проверить наличие и цены в каталоге.\n\n" +
+              "Просто напишите артикул (например, [B]6205[/B]) или опишите задачу.\n\n" +
+              "Доступные команды:\n" +
+              "• [B]/подшипник[/B] [артикул] — поиск по каталогу\n" +
+              "• [B]/аналог[/B] [артикул] — поиск аналогов\n" +
+              "• [B]/статус[/B] — проверка работоспособности\n" +
+              "• [B]/помощь[/B] — справка",
+              webhookBotId,
+            ).catch((e) => console.error("❌ ONIMBOTJOINCHAT reply error:", e)),
+          );
         }
         return json({ ok: true });
       }
