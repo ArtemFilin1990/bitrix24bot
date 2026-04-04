@@ -1,144 +1,352 @@
-# Конфигурация Bitrix24 бота
+# Полная настройка Bitrix24 бота на Cloudflare Workers
 
-## Обзор
+Бот «ИИ-помощник Эверест» разворачивается на стеке **Cloudflare Workers + D1 + KV + Gemini 2.5 Flash + Bitrix24 REST API**. Это руководство проводит через десять этапов — от регистрации аккаунтов до работающего бота в чате Bitrix24.
 
-Этот документ содержит информацию о конфигурации ИИ-помощника Эверест в Bitrix24.
+> Время настройки: **30–60 минут** при наличии облачного портала Bitrix24 на коммерческом тарифе.
 
-## Параметры бота
+---
 
-### Основные настройки
+## 1) Создание и настройка аккаунта Cloudflare
 
-| Параметр | Значение | Описание |
-|----------|----------|----------|
-| **Название бота** | ИИ-помощник Эверест | Отображаемое имя бота в чатах |
-| **URL обработчика** | https://bitrix24bot.vza3555.workers.dev/imbot | Cloudflare Worker endpoint |
-| **Код бота** | 6k0exwyimz06si3h | Внутренний код в Bitrix24 |
-| **CLIENT_ID** | tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf | ID клиентского приложения |
-| **BOT_ID** | 1267 | ID бота в системе |
-| **Тип бота** | Чат-бот, ответы поступают сразу | Синхронный режим работы |
+### Регистрация
 
-### REST API вебхук
+Откройте:
 
-| Параметр | Значение |
-|----------|----------|
-| **Portal** | ewerest.bitrix24.ru |
-| **Webhook URL** | https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/ |
-| **Application Token** | z9rxpcoeaslfm10j04vybah79h2jumma |
+- `https://dash.cloudflare.com/sign-up/workers-and-pages`
 
-## События (Webhooks)
+Создайте аккаунт Cloudflare. Для старта обычно хватает бесплатного плана Workers.
 
-Бот подписан на следующие события:
+### Получение Account ID
 
-- ✅ **ONIMBOTMESSAGEADD** - Новое сообщение боту (основное событие)
-- ✅ **ONIMBOTMESSAGEUPDATE** - Обновление сообщения чат-ботом
-- ✅ **ONIMBOTMESSAGEDELETE** - Удаление сообщения чат-ботом
-- ✅ **ONIMBOTJOINCHAT** - Включение бота в чат
-- ✅ **ONIMBOTDELETE** - Удаление бота
-- ✅ **ONIMCOMMANDADD** - Команда боту
-- ✅ **ONCRMINVOICEDELETE** - Удаление счета
-- ✅ **ONCRMLEADADD** - Создание лида
-- ✅ **ONCRMCOMPANYUPDATE** - Обновление компании
-- ✅ **ONCRMCOMPANYADD** - Создание компании
+Получить Account ID можно так:
 
-## Права доступа
+- из URL после `https://dash.cloudflare.com/`;
+- на главной странице аккаунта в блоке API;
+- через меню аккаунта (`⋮` → `Copy account ID`).
 
-Боту предоставлены следующие права:
+Сохраните `ACCOUNT_ID` — он нужен для деплоя и CI/CD.
 
-- ✅ **CRM (crm)** - Доступ к CRM данным
-- ✅ **Задачи (task)** - Работа с задачами
-- ✅ **Создание и управление Чат-ботами (imbot)** - Управление ботом
-- ✅ **Чат и уведомления (im)** - Отправка сообщений
+### Создание API-токена
 
-## Настройка Cloudflare Worker
+Откройте:
 
-### Переменные окружения (wrangler.toml)
+- `https://dash.cloudflare.com/profile/api-tokens`
+
+Создайте `Custom token` и выдайте права:
+
+- `Account → Workers Scripts → Edit`
+- `Account → D1 → Edit`
+- `Account → Workers KV Storage → Edit`
+
+В `Account Resources` укажите нужный аккаунт, сохраните токен и запишите его сразу (показывается один раз).
+
+---
+
+## 2) Установка Wrangler CLI и авторизация
+
+### Установка Wrangler 4
+
+Требуется Node.js 18+.
+
+```bash
+# Глобально
+npm install -g wrangler@latest
+
+# Локально в проекте (предпочтительно)
+npm install -D wrangler@latest
+```
+
+### Авторизация
+
+```bash
+npx wrangler login
+```
+
+Для CI/CD:
+
+```bash
+export CLOUDFLARE_API_TOKEN=<your_token>
+export CLOUDFLARE_ACCOUNT_ID=<your_account_id>
+```
+
+### Проверка
+
+```bash
+npx wrangler --version
+npx wrangler whoami
+```
+
+### Важно про Wrangler 4
+
+- `wrangler publish` заменён на `wrangler deploy`.
+- Для D1/KV/R2 многие команды локальные по умолчанию.
+- Для работы с production-ресурсами используйте `--remote`.
+
+---
+
+## 3) Создание базы данных Cloudflare D1
+
+### Создание базы
+
+База данных уже описана в `wrangler.toml` как `bearings-catalog` с binding `CATALOG`. Если создаёте с нуля:
+
+```bash
+npx wrangler d1 create bearings-catalog
+```
+
+В `wrangler.toml` это выглядит так (уже настроено в проекте):
 
 ```toml
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "bearings-catalog"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+migrations_dir = "migrations"
+```
+
+### Применение миграций
+
+В проекте настроен `migrations_dir = "migrations"` — всегда используйте `wrangler d1 migrations apply`:
+
+```bash
+# Локально
+npx wrangler d1 migrations apply bearings-catalog
+
+# Продакшн
+npx wrangler d1 migrations apply bearings-catalog --remote
+```
+
+---
+
+## 4) Создание Cloudflare KV namespace
+
+```bash
+npx wrangler kv namespace create CHAT_HISTORY
+```
+
+В `wrangler.toml` это выглядит так (уже настроено в проекте):
+
+```toml
+[[kv_namespaces]]
+binding = "CHAT_HISTORY"
+id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+Использование в коде:
+
+- `env.CHAT_HISTORY.get(key)`
+- `env.CHAT_HISTORY.put(key, value)`
+
+### Пример `wrangler.toml`
+
+```toml
+name = "bitrix24bot"
+main = "b24-imbot/worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "CHAT_HISTORY"
+id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+[[d1_databases]]
+binding = "CATALOG"
+database_name = "bearings-catalog"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+migrations_dir = "migrations"
+
 [vars]
-BOT_ID    = "1267"
-CLIENT_ID = "tbbsrb7w6k7vvnzegup7z4w7dmgvbqkf"
+BOT_ID    = "0"
+CLIENT_ID = "your_client_id"
+GEMINI_MODEL = "gemini-2.5-flash"
 ```
 
-### Секреты (устанавливаются через wrangler secret put)
+---
 
-Следующие значения должны быть установлены как секреты Cloudflare Worker:
+## 5) Получение Google Gemini API Key
+
+1. Откройте `https://aistudio.google.com`.
+2. Перейдите в `Get API key`.
+3. Нажмите `Create API key`.
+4. Скопируйте ключ (обычно начинается с `AIza...`).
+
+Практически полезно сразу проверить лимиты проекта:
+
+- `https://aistudio.google.com/rate-limit`
+
+---
+
+## 6) Настройка входящего вебхука в Bitrix24
+
+Путь в облачном Bitrix24:
+
+- `Приложения → Разработчикам → Готовые сценарии → Другое → Входящий вебхук`
+
+Выдайте права:
+
+- `imbot` (обязательно)
+- `im` (обязательно)
+- `crm` (опционально, если нужен доступ к CRM)
+
+Пример webhook URL:
+
+```text
+https://<portal>.bitrix24.ru/rest/1/<token>/
+```
+
+Не публикуйте этот URL в репозитории и логах.
+
+---
+
+## 7) Установка секретов через Wrangler
+
+Воркер читает следующие секреты (имена должны совпадать точно):
 
 ```bash
-# Bitrix24 REST API
-wrangler secret put B24_PORTAL          # ewerest.bitrix24.ru
-wrangler secret put B24_USER_ID         # 1
-wrangler secret put B24_TOKEN           # запасной путь (если не задан BITRIX_WEBHOOK_URL)
-wrangler secret put BITRIX_WEBHOOK_URL  # https://ewerest.bitrix24.ru/rest/1/4qp82wemchowt0f0/ (строго /rest/<user>/<token>/)
-
-# Безопасность
-wrangler secret put B24_APP_TOKEN       # z9rxpcoeaslfm10j04vybah79h2jumma
-
-# AI и другие сервисы
-wrangler secret put GEMINI_API_KEY      # Ключ Google Gemini API
-wrangler secret put WORKER_HOST         # bitrix24bot.vza3555.workers.dev
-wrangler secret put IMPORT_SECRET       # Случайная строка для защиты импорта
+npx wrangler secret put GEMINI_API_KEY      # Google Gemini API ключ
+npx wrangler secret put B24_PORTAL          # URL портала: https://<portal>.bitrix24.ru
+npx wrangler secret put B24_USER_ID         # ID пользователя REST-вебхука
+npx wrangler secret put B24_TOKEN           # Токен REST-вебхука
+npx wrangler secret put B24_APP_TOKEN       # Токен приложения (обязателен для /register)
+npx wrangler secret put IMPORT_SECRET       # Секрет для защиты admin-эндпоинтов
+npx wrangler secret put WORKER_HOST         # Домен воркера (без https://), напр.: bitrix24bot.workers.dev
 ```
 
-## Функциональность
-
-### Обработка сообщений из чатов
-
-Бот настроен на получение сообщений из чатов с использованием следующей логики:
-
-1. **Личные чаты**: Бот отвечает на все сообщения
-2. **Групповые чаты**: Бот отвечает только если:
-   - Сообщение содержит ключевые слова: подшипник, сделка, клиент, цена, стоимость, скидка, КП, коммерческ, заказ, поставка, наличие, срок, каталог, аналог
-   - ИЛИ бот упомянут через @-mention
-
-### Команды
-
-- `/помощь` или `/start` - Показать справку
-- `/сброс` или `/reset` - Очистить историю диалога
-
-### Безопасность
-
-- ✅ Валидация application token для всех входящих вебхуков
-- ✅ Проверка подписи запросов от Bitrix24
-- ✅ Защита эндпоинтов импорта через IMPORT_SECRET
-
-## Диагностика
-
-### Проверка конфигурации
+Проверка:
 
 ```bash
-curl "https://bitrix24bot.vza3555.workers.dev/status?secret=<IMPORT_SECRET>"
+npx wrangler secret list
 ```
 
-Ответ покажет статус всех необходимых переменных окружения.
+Локальная разработка (`.dev.vars`):
 
-### Логирование
+```env
+GEMINI_API_KEY=AIza...your_key
+B24_PORTAL=https://<portal>.bitrix24.ru
+B24_USER_ID=1
+B24_TOKEN=<rest_webhook_token>
+B24_APP_TOKEN=<app_token>
+IMPORT_SECRET=<your_import_secret>
+WORKER_HOST=bitrix24bot.workers.dev
+```
 
-Все события логируются в Cloudflare Workers Logs с подробной информацией:
-- 📨 Входящие webhook события
-- 👥 Обработка групповых чатов (с ключевыми словами)
-- 💬 Личные сообщения
-- 🧠 Вызовы Gemini API
-- 📤 Отправка ответов
-- ❌ Ошибки с полным stack trace
+Убедитесь, что `.dev.vars` в `.gitignore`.
 
-## Регистрация бота
+---
 
-Для регистрации бота в Bitrix24 после деплоя:
+## 8) Деплой Worker на Cloudflare
 
 ```bash
-curl "https://bitrix24bot.vza3555.workers.dev/register?secret=<IMPORT_SECRET>"
+git clone https://github.com/ArtemFilin1990/bitrix24bot.git
+cd bitrix24bot
+npm install
+npx wrangler deploy
 ```
 
-Эта команда должна быть выполнена один раз после начального развертывания.
+После деплоя примените миграции в удалённой D1:
 
-## Проверка работоспособности
+```bash
+npx wrangler d1 migrations apply bearings-catalog --remote
+```
 
-1. Отправьте боту сообщение в личный чат
-2. Или упомяните бота в групповом чате: `@ИИ-помощник Эверест привет`
-3. Или напишите в групповом чате сообщение с ключевым словом: "Какой подшипник выбрать?"
+Проверки:
 
-Бот должен ответить в течение нескольких секунд.
+```bash
+# Проверка статуса воркера (endpoint защищён секретом)
+curl "https://<worker>.workers.dev/status?secret=<IMPORT_SECRET>"
+npx wrangler tail
+npx wrangler versions list
+```
 
-## Troubleshooting
+---
 
-См. [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) для подробной информации о диагностике проблем.
+## 9) Регистрация бота в Bitrix24 через `/register`
+
+```bash
+curl "https://<worker>.workers.dev/register?secret=<IMPORT_SECRET>"
+```
+
+Endpoint защищён `IMPORT_SECRET` и требует GET-запроса с query-параметром `secret`.
+
+Внутри вызывается `imbot.v2.Bot.register` — для этого **обязателен** секрет `B24_APP_TOKEN`.
+
+Ключевые параметры регистрации (из кода воркера):
+
+- Код бота: `everest_imbot_v2`
+- Webhook: `https://<WORKER_HOST>/imbot`
+- Токен: `B24_APP_TOKEN`
+- Автоматически регистрируются команды: `/подшипник`, `/аналог`, `/статус`
+
+В ответе приходит числовой `BOT_ID`, который нужно сохранить в `wrangler.toml` в секции `[vars]` (`BOT_ID`).
+
+---
+
+## 10) Финальная проверка
+
+### Проверка endpoint статуса
+
+Endpoint `/status` защищён `IMPORT_SECRET`:
+
+```bash
+curl "https://<worker>.workers.dev/status?secret=<IMPORT_SECRET>"
+```
+
+### Проверка в Bitrix24
+
+1. Найдите бота в мессенджере.
+2. Отправьте тестовое сообщение.
+3. Если бот не отвечает, откройте логи:
+
+```bash
+npx wrangler tail
+```
+
+---
+
+## Типовые проблемы
+
+- Бот не отображается: повторите `/register`, проверьте права `imbot`.
+- `ACCESS_DENIED: Client ID not specified`: проверьте `CLIENT_ID` в `[vars]` в `wrangler.toml`.
+- `QUERY_LIMIT_EXCEEDED`: превышен лимит Bitrix24 API, добавьте throttling/очередь.
+- Ошибки D1: убедитесь, что миграции применялись с `--remote`.
+- Gemini не отвечает: проверьте лимиты проекта в AI Studio.
+
+---
+
+## Команды для быстрого старта
+
+```bash
+# 1) Wrangler
+npm install -g wrangler@latest
+wrangler login
+wrangler whoami
+
+# 2) Проект
+git clone https://github.com/ArtemFilin1990/bitrix24bot.git
+cd bitrix24bot
+npm install
+
+# 3) Ресурсы (если создаёте с нуля — уже описаны в wrangler.toml)
+npx wrangler d1 create bearings-catalog
+npx wrangler kv namespace create CHAT_HISTORY
+
+# 4) Секреты
+npx wrangler secret put GEMINI_API_KEY
+npx wrangler secret put B24_PORTAL
+npx wrangler secret put B24_USER_ID
+npx wrangler secret put B24_TOKEN
+npx wrangler secret put B24_APP_TOKEN
+npx wrangler secret put IMPORT_SECRET
+npx wrangler secret put WORKER_HOST
+
+# 5) Миграции и деплой
+npx wrangler d1 migrations apply bearings-catalog --remote
+npx wrangler deploy
+
+# 6) Регистрация бота
+curl "https://<worker>.workers.dev/register?secret=<IMPORT_SECRET>"
+
+# 7) Проверка статуса
+curl "https://<worker>.workers.dev/status?secret=<IMPORT_SECRET>"
+```
+
+Готово: бот работает в serverless-режиме, масштабируется автоматически и не требует отдельного сервера.

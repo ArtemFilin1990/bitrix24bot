@@ -1068,11 +1068,7 @@ async function askGemini(env, history, userText) {
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents,
       tools: GEMINI_TOOLS,
-      generationConfig: {
-        maxOutputTokens: 4096,
-        temperature: 0.1,
-        thinkingConfig: { thinkingBudget: 2048 },
-      },
+
     });
     let r = await fetchWithTimeout(URL, {
       method: "POST",
@@ -1155,7 +1151,7 @@ async function askGemini(env, history, userText) {
           }
         } catch { /* skip parse errors */ }
       }
-      // Политика доказательств: предупреждение если не были вызваны инструменты
+
       responseText = enforceEvidencePolicy(responseText, userText, usedToolNames);
 
       console.log(`✅ Gemini: final response (${responseText.length} chars, finishReason=${finishReason})`);
