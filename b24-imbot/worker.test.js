@@ -241,29 +241,22 @@ describe('/reset endpoint', () => {
 // ── /imbot routing ────────────────────────────────────────────────────────────
 
 describe('/imbot event routing', () => {
-  it('logs warning but continues with mismatched B24 app token (soft mode)', async () => {
-    const mockFetch = makeApiFetchMock();
-    vi.stubGlobal('fetch', mockFetch);
-
-    try {
-      const ctx = makeCtx();
-      const res = await worker.fetch(
-        makeImbotRequest({
-          event: 'ONIMBOTMESSAGEADD',
-          'auth[application_token]': 'invalid-token',
-          'data[USER][ID]': '42',
-          'data[PARAMS][DIALOG_ID]': '42',
-          'data[PARAMS][MESSAGE]': 'Привет',
-        }),
-        makeEnv({ B24_APP_TOKEN: 'expected-token' }),
-        ctx,
-      );
-      await ctx._flush();
-      // Soft mode: request is NOT rejected, bot processes the message
-      expect(res.status).toBe(200);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  it('rejects webhook with mismatched B24 app token (403)', async () => {
+    const ctx = makeCtx();
+    const res = await worker.fetch(
+      makeImbotRequest({
+        event: 'ONIMBOTMESSAGEADD',
+        'auth[application_token]': 'invalid-token',
+        'data[USER][ID]': '42',
+        'data[PARAMS][DIALOG_ID]': '42',
+        'data[PARAMS][MESSAGE]': 'Привет',
+      }),
+      makeEnv({ B24_APP_TOKEN: 'expected-token' }),
+      ctx,
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toBe('Forbidden');
   });
 
   it('non-ONIMBOTMESSAGEADD event returns {ok:true} immediately', async () => {
