@@ -1059,7 +1059,22 @@ async function askGemini(env, history, userText) {
   console.log(`🤖 askGemini: model=${MODEL}, historyLength=${history.length}`);
 
   const contents = [...history, { role: "user", parts: [{ text: userText }] }];
+  const currentTurnStart = contents.length; // индекс начала записей текущего хода
+  const usedToolNames = new Set();
 
+  for (let i = 0; i < 8; i++) {
+    console.log(`🔄 Gemini iteration ${i + 1}/8`);
+    const geminiBody = JSON.stringify({
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      tools: GEMINI_TOOLS,
+      generationConfig: {
+        maxOutputTokens: 4096,
+        temperature: 0.1,
+        thinkingConfig: { thinkingBudget: 2048 },
+      },
+    });
+    let r = await fetchWithTimeout(URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: geminiBody,
@@ -1110,7 +1125,43 @@ async function askGemini(env, history, userText) {
         .filter((p) => p.text)
         .map((p) => p.text)
         .join("") || "—";
+      // Проверка причины завершения
+      const finishReason = candidate.finishReason;
+      if (finishReason === "MAX_TOKENS") {
+        console.warn("⚠️ Gemini: response truncated (MAX_TOKENS)");
+        responseText += "\n\n[I]...ответ сокращён. Задайте уточняющий вопрос для продолжения.[/I]";
+      }
+      // Пост-обработка: детект потенциальных галлюцинаций
+      // Ищем ТОЛЬКО в текущем ходе (не в истории) результаты инструментов с found:0
+      const toolResults = contents
+        .slice(currentTurnStart)
+        .filter((c) => c.role === "function")
+        .flatMap((c) => c.parts || []);
+      for (const tr of toolResults) {
+        try {
+          const res = tr.functionResponse;
+          if (!res) continue;
+          const parsed = typeof res.response?.result === "string"
+            ? JSON.parse(res.response.result) : null;
+          if (!parsed || parsed.found !== 0) continue;
 
+          if (res.name === "search_catalog" && /\d+\s*(руб|₽|шт)/i.test(responseText)) {
+            responseText += "\n\n[I]⚠️ Внимание: данные о цене/наличии не подтверждены каталогом Эверест. Уточните у менеджера.[/I]";
+            break;
+          }
+          if (res.name === "search_analogs" && /аналог/i.test(responseText) && /\d{3,}/i.test(responseText)) {
+            responseText += "\n\n[I]⚠️ Указанные аналоги не подтверждены базой Эверест. Требуется проверка по габаритам (d, D, B).[/I]";
+            break;
+          }
+        } catch { /* skip parse errors */ }
+      }
+      // Политика доказательств: предупреждение если не были вызваны инструменты
+      responseText = enforceEvidencePolicy(responseText, userText, usedToolNames);
+
+      console.log(`✅ Gemini: final response (${responseText.length} chars, finishReason=${finishReason})`);
+      return {
+        text: responseText,
+        history: contents.slice(-20),
       };
     }
 
@@ -2038,9 +2089,19 @@ export default {
         return json({ error: "Forbidden" }, 403);
       }
       const check = (v) => (v ? "✅" : "❌ missing");
+      const hasGemini = !!env.GEMINI_API_KEY;
+      const hasBitrix = !!(env.B24_PORTAL && env.B24_TOKEN);
+      const hasDb = !!env.CATALOG;
+      const hasKv = !!env.CHAT_HISTORY;
       return json({
-        ok: true,
-        version: "2026-04-03-v2",
+        status: (hasGemini && hasBitrix && hasDb && hasKv) ? "ok" : "degraded",
+        bot_id: env.BOT_ID || null,
+        worker: "bitrix24bot",
+        database: hasDb ? "connected" : "missing",
+        kv: hasKv ? "connected" : "missing",
+        gemini: hasGemini ? "configured" : "missing",
+        bitrix24: hasBitrix ? "configured" : "missing",
+        version: "2026-04-04-v3",
         config: {
           BOT_ID: check(env.BOT_ID),
           CLIENT_ID: check(env.CLIENT_ID),
@@ -2245,6 +2306,11 @@ export default {
       }
 
       const event = data["event"];
+      const userId = data["data[USER][ID]"];
+      const chatId =
+        data["data[PARAMS][DIALOG_ID]"] || data["data[PARAMS][FROM_USER_ID]"];
+      const rawMessage = data["data[PARAMS][MESSAGE]"];
+      const message = rawMessage?.trim();
 
       // BOT_ID из вебхука — используем его при ответе, чтобы отвечать именно тем ботом,
       // которому адресовано сообщение (ID в чате может отличаться от env.BOT_ID)
@@ -2327,6 +2393,29 @@ export default {
               await botReply(env, safeCmdChatId, "⚠️ Временная ошибка при выполнении команды. Попробуйте через минуту.", webhookBotId).catch(() => {});
             }
           })());
+        }
+        return json({ ok: true });
+      }
+
+      // Приветственное сообщение при первом открытии чата с ботом
+      if (event === "ONIMBOTJOINCHAT") {
+        console.log("👋 ONIMBOTJOINCHAT:", { userId, chatId });
+        if (chatId) {
+          ctx.waitUntil(
+            botReply(
+              env,
+              chatId,
+              "Здравствуйте! Я [B]ИИ-помощник Эверест[/B] — консультант по подшипникам.\n\n" +
+              "Помогу подобрать подшипники, найти аналоги, проверить наличие и цены в каталоге.\n\n" +
+              "Просто напишите артикул (например, [B]6205[/B]) или опишите задачу.\n\n" +
+              "Доступные команды:\n" +
+              "• [B]/подшипник[/B] [артикул] — поиск по каталогу\n" +
+              "• [B]/аналог[/B] [артикул] — поиск аналогов\n" +
+              "• [B]/статус[/B] — проверка работоспособности\n" +
+              "• [B]/помощь[/B] — справка",
+              webhookBotId,
+            ).catch((e) => console.error("❌ ONIMBOTJOINCHAT reply error:", e)),
+          );
         }
         return json({ ok: true });
       }
