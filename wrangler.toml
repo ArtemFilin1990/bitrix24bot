@@ -1,7 +1,7 @@
 # Продакшн-конфиг для деплоя через GitHub Actions или `wrangler deploy` из корня репо
 # Перед деплоем установи секреты через `wrangler secret put <NAME>`:
 #   GEMINI_API_KEY, B24_PORTAL, B24_USER_ID, B24_TOKEN,
-#   WORKER_HOST, IMPORT_SECRET, B24_APP_TOKEN (optional)
+#   WORKER_HOST, IMPORT_SECRET, B24_APP_TOKEN
 name = "bitrix24bot"
 main = "b24-imbot/worker.js"
 compatibility_date = "2024-01-01"
@@ -9,17 +9,17 @@ compatibility_date = "2024-01-01"
 [vars]
 # ВАЖНО: BOT_ID и CLIENT_ID можно держать в [vars], т.к. они не являются секретами
 # BOT_ID получается после вызова GET /register, CLIENT_ID — при регистрации приложения
-BOT_ID    = "1279"
-CLIENT_ID = "custom9uf7sir3rzg25ldiulc24um09tot0yor"
+BOT_ID    = "1279"       # REPLACE: ваш BOT_ID из ответа /register
+CLIENT_ID = "custom9uf7sir3rzg25ldiulc24um09tot0yor"  # REPLACE: ваш CLIENT_ID из регистрации приложения Bitrix24
 
 [[kv_namespaces]]
 binding = "CHAT_HISTORY"
-id = "f7257a53733146b6926eb20321ab4896"
+id = "f7257a53733146b6926eb20321ab4896"  # REPLACE: ваш KV namespace id (wrangler kv namespace create "CHAT_HISTORY")
 
 # D1 — каталог подшипников, база знаний, бренды, аналоги
 # migrations_dir — включает инкрементальные миграции через `wrangler d1 migrations apply`
 [[d1_databases]]
 binding = "CATALOG"
 database_name = "bearings-catalog"
-database_id = "0b5b8131-d96b-4478-a63e-edc7c787b654"
+database_id = "0b5b8131-d96b-4478-a63e-edc7c787b654"  # REPLACE: ваш D1 database_id (wrangler d1 create bearings-catalog)
 migrations_dir = "migrations"
