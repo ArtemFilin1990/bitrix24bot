@@ -1,12 +1,4 @@
-# Развертывание и запуск бота Bitrix24
-
-## Обзор
-
-Этот документ описывает процесс развертывания и запуска ИИ-бота для Bitrix24 на платформе Cloudflare Workers.
-
-## Архитектура
-
-```
+# Развертывание и запуск бота Bitrix24## ОбзорЭтот документ описывает процесс развертывания и запуска ИИ-бота для Bitrix24 на платформе Cloudflare Workers.## Архитектура```
 ┌─────────────────┐
 │   Bitrix24 IM   │
 │   (вебхук)      │
@@ -28,40 +20,18 @@
 │ D1 Database │    │ KV Namespace │
 │ (SQLite)    │    │ (История)    │
 └─────────────┘    └──────────────┘
-```
-
-## Предварительные требования
-
-### 1. Аккаунт Cloudflare
-
-- Зарегистрируйтесь на [Cloudflare](https://dash.cloudflare.com/)
+```## Предварительные требования### 1. Аккаунт Cloudflare- Зарегистрируйтесь на [Cloudflare](https://dash.cloudflare.com/)
 - Создайте API токен с правами:
   - Workers Scripts:Edit
   - Workers KV Storage:Edit
-  - D1:Edit
-
-### 2. Установленное ПО
-
-- Node.js 24+
+  - D1:Edit### 2. Установленное ПО- Node.js 24+
 - Python 3.9+
 - Git
-- Wrangler CLI 4.77.0
-
-```bash
+- Wrangler CLI 4.77.0```bash
 npm install -g wrangler@4.77.0
-```
-
-### 3. Bitrix24 Portal
-
-- Активный портал Bitrix24
+```### 3. Bitrix24 Portal- Активный портал Bitrix24
 - Права администратора для создания приложений
-- Вебхук для REST API
-
-## Структура секретов
-
-Для работы бота требуются следующие секреты:
-
-| Секрет | Описание | Где получить |
+- Вебхук для REST API## Структура секретовДля работы бота требуются следующие секреты:| Секрет | Описание | Где получить |
 |--------|----------|--------------|
 | `GEMINI_API_KEY` | API ключ Google Gemini | [Google AI Studio](https://makersuite.google.com/app/apikey) |
 | `B24_PORTAL` | URL портала Bitrix24 | https://your-portal.bitrix24.ru |
@@ -69,7 +39,8 @@ npm install -g wrangler@4.77.0
 | `B24_TOKEN` | Токен REST API | Настройки → REST API |
 | `IMPORT_SECRET` | Секрет для защиты эндпоинтов импорта | Сгенерируйте случайную строку |
 | `WORKER_HOST` | Домен Worker | subdomain.workers.dev |
-| `B24_APP_TOKEN` | Токен приложения (опционально) | Приложения → Создать |
+| `B24_APP_TOKEN` | Токен приложения Bitrix24 (**обязателен** для регистрации бота и ответов через v2 API) | Приложения → Создать → App Token |
+| `BITRIX_WEBHOOK_URL` | Полный URL вебхука Bitrix24 (`https://portal/rest/user/token/`) — альтернатива B24_PORTAL+B24_USER_ID+B24_TOKEN | Настройки → REST API → Входящий вебхук |
 
 ## Установка секретов
 
@@ -82,6 +53,8 @@ wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN
 wrangler secret put IMPORT_SECRET
 wrangler secret put WORKER_HOST
+wrangler secret put B24_APP_TOKEN
+wrangler secret put BITRIX_WEBHOOK_URL
 ```
 
 ### В GitHub Actions
@@ -95,6 +68,8 @@ wrangler secret put WORKER_HOST
    - `B24_USER_ID`
    - `B24_TOKEN`
    - `IMPORT_SECRET`
+   - `B24_APP_TOKEN`
+   - `BITRIX_WEBHOOK_URL`
 
 ## Создание ресурсов Cloudflare
 
@@ -122,11 +97,11 @@ wrangler kv:namespace create "CHAT_HISTORY"
 [[d1_databases]]
 binding = "CATALOG"
 database_name = "bearings-catalog"
-database_id = "ваш-database-id"
+database_id = "ваш-database-id"  # REPLACE
 
 [[kv_namespaces]]
 binding = "CHAT_HISTORY"
-id = "ваш-kv-namespace-id"
+id = "ваш-kv-namespace-id"  # REPLACE
 ```
 
 ## Процесс развертывания
@@ -169,7 +144,7 @@ wrangler deploy
 #### Шаг 2: Применить схему базы данных
 
 ```bash
-wrangler d1 execute bearings-catalog --file schema.sql --remote
+wrangler d1 migrations apply bearings-catalog --remote
 ```
 
 #### Шаг 3: Загрузить данные о подшипниках
@@ -330,7 +305,7 @@ curl "https://your-worker.workers.dev/register?secret=YOUR_IMPORT_SECRET"
 
 ```toml
 [vars]
-BOT_ID = "1267"
+BOT_ID = "1267"  # REPLACE with your actual BOT_ID
 ```
 
 ### 3. Настройка вебхука
@@ -403,7 +378,7 @@ pytest tests/ -v
 
 2. Пересоздайте схему если нужно:
    ```bash
-   wrangler d1 execute bearings-catalog --file schema.sql --remote
+   wrangler d1 migrations apply bearings-catalog --remote
    ```
 
 ### Ошибки Gemini API
@@ -443,8 +418,9 @@ git push origin main
 ### Обновление схемы
 
 ```bash
-# ВНИМАНИЕ: это удалит все данные
-wrangler d1 execute bearings-catalog --file schema.sql --remote
+# Добавьте новый файл миграции в папку migrations/
+# затем примените:
+wrangler d1 migrations apply bearings-catalog --remote
 
 # Затем перезагрузите данные
 ./run-bot.sh seed
