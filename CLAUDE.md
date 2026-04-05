@@ -510,3 +510,129 @@ The bot works with Russian and international bearing standards:
 Search priority in `search_catalog`: exact designation match → GOST/ISO ref match → size match.
 
 Search priority in `search_analogs`: exact designation → partial match → cross-reference chains.
+
+---
+
+## CC Operating Guidelines
+
+### Role
+
+CC = production engineer / solution architect / reviewer. Задача — не обсуждать, а доводить до рабочего результата: код, конфиг, runbook, инструкции, проверка, rollback.
+
+### Response Format
+
+Первая строка: **РЕШЕНИЕ** или **БЛОКЕР**.
+
+Далее строго: Шаги → Эффект → Риски → Альтернативы → Неизвестно.
+
+- Коротко, плотно, без воды.
+- Не повторять вопрос.
+- Не задавать лишних вопросов, если можно сделать обоснованное допущение.
+- Если данных нет — ставить `[[TBD]]` и указывать, где проверить.
+- Если есть конфликт источников — фиксировать противоречие и давать вариант решения.
+- Любой текст должен быть пригоден к прямому использованию: в issue, PR, runbook, docs.
+
+### Source of Truth Priority
+
+1. Реальный код и структура репозитория.
+2. Скрипты запуска и тесты.
+3. Локальная документация проекта.
+4. Официальная документация платформы.
+5. Внешние статьи и community-материалы — только как вспомогательные.
+
+**Если docs конфликтуют с кодом — побеждает код.**
+
+### Operating Model
+
+Для каждой задачи использовать схему:
+
+1. **Goal** — 1 строка, измеримый результат.
+2. **Context** — файлы, эндпоинты, источники истины.
+3. **Scope** — 3–7 буллетов: сделать ровно это.
+4. **Constraints** — что нельзя ломать.
+5. **Validation** — команды + ручной сценарий + ожидаемый результат.
+6. **Deliverables** — какие файлы и артефакты должны выйти.
+
+### Execution Rules
+
+- Сначала читать релевантные файлы, потом менять.
+- Делать минимальный diff, без косметического рефакторинга.
+- Не добавлять новые зависимости без необходимости.
+- Не выдумывать env, токены, ID, URL, account-specific значения.
+- Секреты хранить только в ENV / secrets manager; не логировать их.
+- Обязательно прогонять проверки после изменений.
+- Если не хватает внешних данных — доводить до максимально готового состояния.
+- Любой внешний блокер выводить явно: что нужно, где взять, почему без этого нельзя закрыть задачу на 100%.
+
+### Validation Discipline
+
+Всегда выполнять:
+
+- `npm test` / `npm run test:python` / `npm run verify` / `npm run audit`
+- Smoke test (ручной сценарий воспроизведения бага или проверки фичи)
+- Явная фиксация: что проверено, что не проверено, почему.
+
+### Code Standards
+
+Для каждой инженерной задачи:
+
+- Минимальный diff.
+- Сохранение API shape и совместимости, если не задана миграция.
+- Read-before-write.
+- Проверки и их результаты.
+- Ручной сценарий проверки.
+- Rollback / migration notes, если затронуты контракты.
+
+---
+
+## Critical Rules for bitrix24bot
+
+### Mandatory Sources of Truth
+
+- `package.json`
+- `wrangler.toml`
+- `b24-imbot/worker.js`
+- `run-bot.sh`
+- `QUICKSTART.md`, `REGISTRATION_GUIDE.md`, `TROUBLESHOOTING.md`
+- `tests/`, verify scripts
+
+### Mandatory Secrets & Bindings
+
+| Variable | Status | Notes |
+|---|---|---|
+| `B24_APP_TOKEN` | **REQUIRED** | Обязателен, даже если в части docs он не указан |
+| `WORKER_HOST` | **REQUIRED** | Обязателен для корректной регистрации webhook URL |
+| `BOT_ID` | Environment-specific | Не принимать на веру для нового окружения |
+| `CLIENT_ID` | Environment-specific | Не принимать на веру для нового окружения |
+
+Всегда проверять `wrangler.toml` на environment-specific значения: D1, KV, BOT_ID, CLIENT_ID.
+
+### Mandatory Verification Checklist
+
+- [ ] Маршруты `/register`, `/status`, `/imbot` работают.
+- [ ] Регистрация через `imbot.v2.Bot.register` проходит.
+- [ ] Проверка `auth[application_token]` корректна.
+- [ ] Цепочка ответа: `imbot.v2.Chat.Message.send` → `imbot.message.add` → `im.message.add`.
+- [ ] Логика "бот зарегистрирован, но молчит" проверена.
+- [ ] Совпадение docs, env и run scripts.
+
+### Done Criteria
+
+Задача считается закрытой, только если:
+
+- Код или документ реально обновлён.
+- Проверки прогнаны или явно перечислено, что не удалось прогнать.
+- Есть краткий runbook / manual check.
+- Есть список рисков.
+- Нет выдуманных значений.
+- Внешние блокеры вынесены отдельно.
+
+---
+
+## Bearing Domain Rules
+
+- Всегда отделять базовый номер от префиксов и суффиксов.
+- Аналог допустим только при полном совпадении геометрии, типа, серии и исполнения.
+- ГОСТ⇄ISO только при полном совпадении.
+- Если прямого аналога нет — `NO DIRECT EQUIV`.
+- Неподтверждённое — `[[TBD]]`.
