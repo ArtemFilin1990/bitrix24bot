@@ -1,93 +1,54 @@
-# bitrix24bot — ИИ-консультант по подшипникам для Bitrix24
+# Bitrix24 AI Bot
 
-Внутренний Bitrix24 бот «Алексей» от компании «Эверест» (Вологда) — ИИ-консультант по подшипникам и приводным компонентам с интеграцией Gemini 2.5 Flash и CRM.
+Внутренний ИИ-ассистент для Bitrix24 на базе Cloudflare Workers и Google Gemini 2.5 Flash.
 
-## 🚀 Возможности
+## Возможности
 
-- **ИИ-консультант**: Gemini 2.5 Flash с function calling для ответов на технические вопросы
-- **Каталог подшипников**: Поиск по артикулу, размерам (d×D×B), ГОСТ/ISO обозначениям
-- **Поиск аналогов**: 37,000+ кросс-референсов между ГОСТ, ISO и брендами (SKF, FAG, NSK, NTN, KOYO и др.)
-- **База знаний**: 120+ технических статей с полнотекстовым поиском (FTS5)
-- **CRM интеграция**: Работа со сделками, компаниями, товарами через Bitrix24 REST API
-- **История диалогов**: 24-часовое хранение контекста разговоров в Cloudflare KV
+- 🤖 ИИ-ответы через Google Gemini 2.5 Flash
+- 📦 Поиск по каталогу подшипников (D1 SQLite)
+- 💬 История диалогов (KV storage)
+- 🔧 Интеграция с CRM Bitrix24
+- ☁️ Бессерверная архитектура на Cloudflare Workers
 
-## 🏗️ Архитектура
+## Быстрый старт
 
-| Компонент | Технология |
-|-----------|------------|
-| Runtime | Cloudflare Workers (ES modules) |
-| AI | Google Gemini 2.5 Flash + Function Calling |
-| Database | Cloudflare D1 (SQLite + FTS5) |
-| Cache | Cloudflare KV |
-| CRM | Bitrix24 REST API |
+Полные инструкции: [QUICKSTART.md](QUICKSTART.md)
 
-## 📁 Структура проекта
-
-```
-bitrix24bot/
-├── b24-imbot/
-│   └── worker.js          # Основной Worker — вся логика бота
-├── scripts/
-│   ├── build_bearings_seed.py  # Генерация SQL из CSV каталогов
-│   ├── build_kb_seed.py        # Генерация SQL из базы знаний
-│   └── process_inbox.py        # Обработка inbox/ файлов
-├── inbox/                 # Папка для импорта данных (CSV, Markdown)
-├── schema.sql             # Схема D1 базы данных
-├── wrangler.toml          # Конфигурация Cloudflare Workers
-└── tests/                 # Python и JavaScript тесты
-```
-
-## 🚀 Быстрый старт
-
-См. [QUICKSTART.md](./QUICKSTART.md) для пошаговой инструкции по деплою.
+Для деплоя потребуются следующие секреты:
 
 ```bash
-# 1. Установите секреты (минимальный набор для работы бота)
 wrangler secret put GEMINI_API_KEY
 wrangler secret put B24_PORTAL
 wrangler secret put B24_USER_ID
 wrangler secret put B24_TOKEN
-
-# Дополнительные секреты (для импорта данных и регистрации)
 wrangler secret put IMPORT_SECRET
 wrangler secret put WORKER_HOST
-
-# 2. Деплой
-wrangler deploy
-
-# 3. Загрузка данных
-wrangler d1 execute bearings-catalog --file schema.sql --remote
+wrangler secret put B24_APP_TOKEN
+wrangler secret put BITRIX_WEBHOOK_URL
 ```
 
-## 📖 Документация
+## Структура
 
-| Документ | Описание |
-|----------|----------|
-| [QUICKSTART.md](./QUICKSTART.md) | Быстрый старт и деплой |
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Полная документация по настройке |
-| [CLAUDE.md](./CLAUDE.md) | Архитектура и конвенции кода |
-| [SITEMAP.md](./SITEMAP.md) | Карта репозитория |
+```
+b24-imbot/worker.js    # Cloudflare Worker (основной файл)
+migrations/            # D1 миграции (применять через wrangler d1 migrations apply)
+tests/                 # Тесты и verify-скрипты
+```
 
-## 📚 Справочная информация
-
-Репозиторий содержит 120+ технических статей по подшипникам в формате Markdown:
-
-- **Типы подшипников** — классификация и характеристики
-- **Системы обозначений** — ГОСТ, ISO, DIN, JIS
-- **Производители** — SKF, FAG, NSK, NTN, KOYO, TIMKEN, ГПЗ и др.
-- **Стандарты** — ГОСТ 520, ISO 15, ISO 281 и др.
-- **Эксплуатация** — монтаж, смазка, дефекты
-
-## 🧪 Тестирование
+## Деплой
 
 ```bash
-# Python тесты (seed scripts)
-python3 -m unittest discover tests/ -v
-
-# JavaScript тесты (worker)
-npm test
+npm install
+wrangler deploy
 ```
 
-## 📝 Лицензия
+Применить D1-схему:
 
-Проприетарное ПО компании «Эверест».
+```bash
+wrangler d1 migrations apply bearings-catalog --remote
+```
+
+## Документация
+
+- [QUICKSTART.md](QUICKSTART.md) — быстрый старт
+- [DEPLOYMENT.md](DEPLOYMENT.md) — подробные инструкции по деплою
