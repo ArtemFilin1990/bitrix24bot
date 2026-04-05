@@ -55,6 +55,8 @@ const expectedRoutes = [
   { path: "/discover-catalog", method: "GET", auth: "IMPORT_SECRET" },
   { path: "/preview-file", method: "GET", auth: "IMPORT_SECRET" },
   { path: "/status", method: "GET", auth: "IMPORT_SECRET" },
+  { path: "/send", method: "POST", auth: "IMPORT_SECRET" },
+  { path: "/diagnose", method: "GET", auth: "IMPORT_SECRET" },
   { path: "/reset", method: "POST", auth: "none" },
   { path: "/imbot", method: "POST", auth: "B24_APP_TOKEN" },
 ];
