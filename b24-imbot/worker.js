@@ -1,4 +1,3 @@
-// b24-imbot/worker.js
 // Внутренний ИИ-бот для Bitrix24 (im.bot) на Cloudflare Workers + Gemini 2.5 Flash
 // Менеджер пишет боту в личный чат → бот отвечает с данными из CRM
 
@@ -2161,6 +2160,9 @@ export default {
 
     // Диагностика: показать что видит воркер при входящем вебхуке (ВРЕМЕННО)
     if (url.pathname === "/debug-webhook" && request.method === "POST") {
+      if (url.searchParams.get("secret") !== env.IMPORT_SECRET) {
+        return json({ error: "Forbidden" }, 403);
+      }
       const body = await request.text();
       const data = Object.fromEntries(new URLSearchParams(body));
       return json({
@@ -2313,6 +2315,8 @@ export default {
       // Валидация токена приложения
       const appToken = data["auth[application_token]"];
       if (env.B24_APP_TOKEN && appToken !== env.B24_APP_TOKEN) {
+        console.warn("⛔ /imbot rejected: invalid application_token");
+        return json({ error: "Forbidden" }, 403);
       }
 
       const event = data["event"];
