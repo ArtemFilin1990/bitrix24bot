@@ -1,8 +1,0 @@
-# Python dependencies for bitrix24bot
-#
-# Production scripts (scripts/*.py) use only the Python standard library.
-# No external packages are required.
-#
-# Development / testing:
-pytest>=7.0
-PyYAML>=6.0

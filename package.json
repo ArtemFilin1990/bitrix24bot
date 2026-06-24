@@ -1,19 +1,5 @@
 {
-  "type": "module",
-  "scripts": {
-    "test": "vitest run --config vitest.config.js",
-    "test:worker": "vitest run --config vitest.config.js",
-    "test:python": "command -v pytest >/dev/null 2>&1 && python3 -m pytest tests/ -v || python3 -m unittest discover tests/ -v",
-    "verify": "node verify-worker.mjs && node verify-schema.mjs && node verify-gemini-db-integration.mjs",
-    "verify:worker": "node verify-worker.mjs",
-    "verify:schema": "node verify-schema.mjs",
-    "verify:gemini": "node verify-gemini-db-integration.mjs",
-    "audit": "vitest run --config vitest.config.js && node verify-worker.mjs && node verify-schema.mjs && node verify-gemini-db-integration.mjs",
-    "deploy": "wrangler deploy",
-    "deploy:versions": "wrangler versions upload"
-  },
-  "devDependencies": {
-    "vitest": "^3.0.0",
-    "wrangler": "^4.77.0"
-  }
+  "name": "project",
+  "version": "1.0.0",
+  "private": true
 }
